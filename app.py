@@ -349,8 +349,9 @@ def render_risks(result: dict) -> str:
     filtered to require citing evidence facts."""
     risks = result.get("risks") or []
     if not risks:
-        return ('<div class="verified-card">No risks flagged — the figures '
-                "reviewed reconcile.</div>")
+        # No card at all: absence of flagged risks is not an assertion
+        # that the figures reconcile — the checks column says that.
+        return ""
     import html as _html
     order = {"high": 0, "medium": 1, "low": 2}
     icon = {"high": "🔴", "medium": "🟠", "low": "🟡"}

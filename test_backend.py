@@ -891,8 +891,8 @@ if _app is not None:
         # risk set renders a positive "no risks flagged" confirmation
         # rather than nothing — it must not render a phantom risk card.
         _empty_html = _app.render_risks({"risks": []})
-        check("no risks -> a positive confirmation, no phantom risk card",
-              "risk-card" not in _empty_html and "reconcile" in _empty_html.lower())
+        check("no risks -> no phantom risk card",
+              "risk-card" not in _empty_html and "RISK" not in _empty_html.upper())
     check("FAKE payload carries risks for UI development",
           bool(_app.FAKE.get("risks")))
 
