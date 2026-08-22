@@ -21,7 +21,11 @@ try:
     out = os.path.join("docs", "screenshots")
     with sync_playwright() as p:
         page = p.chromium.launch(channel="chrome").new_page(
-            viewport={"width": 1600, "height": 1000})
+            viewport={"width": 1600, "height": 1000},
+            reduced_motion="reduce")  # deterministic captures: the page
+                                      # honors prefers-reduced-motion, so
+                                      # full-page stitching can't race the
+                                      # entrance animations
         page.goto("http://127.0.0.1:7871/")
         page.wait_for_timeout(800)
         page.screenshot(path=f"{out}/idle.png")
