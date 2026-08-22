@@ -295,6 +295,29 @@ check("handles None", backend.purge_upload(None) is False)
 check("handles missing path", backend.purge_upload(
     os.path.join(gradio_tmp, "never_existed.pdf")) is False)
 
+# ── 15. Recommendation layer (#23) — written BEFORE the implementation ─────
+
+print("\n=== 15. Recommendation layer ===")
+check("prompt asks for a recommendation",
+      '"recommendation"' in backend.SYSTEM_PROMPT)
+with open(os.path.join(os.path.dirname(__file__), "fixtures",
+                       "cached_response.json")) as fh:
+    _fx = json.load(fh)
+check("fixture carries a recommendation",
+      bool(str(_fx.get("recommendation", "")).strip()))
+if os.path.exists("sample_report.pdf"):
+    _ok = os.environ.pop("GEMINI_API_KEY", None)
+    os.environ["DEMO_FALLBACK"] = "1"
+    try:
+        _out = backend.analyze("sample_report.pdf", "Does revenue add up?")
+        check("analyze surfaces the recommendation",
+              bool(str(_out.get("recommendation", "")).strip()),
+              f"got: {_out.get('recommendation')!r}")
+    finally:
+        if _ok is not None:
+            os.environ["GEMINI_API_KEY"] = _ok
+        os.environ.pop("DEMO_FALLBACK", None)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
@@ -304,3 +327,4 @@ if FAIL:
     sys.exit(1)
 else:
     print("  All clear. Ship it.")
+
