@@ -1,0 +1,502 @@
+"""FinVerify backend: parse -> redact -> LLM (Gemini, with demo-safety
+fallback) -> verify (with anti-hallucination citation check).
+
+Member 1 owns this file. app.py calls exactly one function:
+
+    analyze(file_path: str, question: str) -> dict
+
+Everything else is internal.
+"""
+
+import json
+import os
+import re
+import tempfile
+
+import pdfplumber
+import openpyxl
+from dotenv import load_dotenv
+
+load_dotenv()
+
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+
+# ── Step 1: File parsing (PDF + XLSX) ─────────────────────────────────────
+
+def parse_pdf(path: str) -> list[tuple[str, str]]:
+    """Return [("Page 1", text), ...] from a PDF."""
+    pages = []
+    with pdfplumber.open(path) as pdf:
+        for i, page in enumerate(pdf.pages, start=1):
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append((f"Page {i}", text))
+    return pages
+
+
+def pdf_metadata_names(path: str) -> list[str]:
+    """Names hiding in PDF document properties. /Author is routinely the
+    preparer's real name or a Windows username, and page.extract_text()
+    never sees it — so we pull it out and feed it to the redactor as an
+    extra known name for this run. PDPA: the file itself never leaves
+    the machine, only extracted text does, so scrubbing the text is the
+    whole battle."""
+    try:
+        with pdfplumber.open(path) as pdf:
+            meta = pdf.metadata or {}
+    except Exception:
+        return []
+    author = str(meta.get("Author") or "").strip()
+    # Ignore junk values and software names ("Microsoft Word") — a lone
+    # word with no space is almost never a redactable full name.
+    if len(author) >= 4 and " " in author:
+        return [author]
+    return []
+
+
+def parse_xlsx(path: str) -> list[tuple[str, str]]:
+    """Return [("Sheet: name", text), ...] from an Excel file."""
+    wb = openpyxl.load_workbook(path, data_only=True)
+    sheets = []
+    for name in wb.sheetnames:
+        ws = wb[name]
+        lines = []
+        for row in ws.iter_rows(values_only=True):
+            line = "\t".join(str(c) if c is not None else "" for c in row)
+            if line.strip():
+                lines.append(line)
+        if lines:
+            sheets.append((f"Sheet: {name}", "\n".join(lines)))
+    wb.close()
+    return sheets
+
+
+def parse_file(path: str) -> list[tuple[str, str]]:
+    """Route to the right parser based on extension."""
+    low = path.lower()
+    if low.endswith(".xlsx") or low.endswith(".xls"):
+        return parse_xlsx(path)
+    if low.endswith(".pdf"):
+        return parse_pdf(path)
+    raise ValueError(f"Unsupported file type: {os.path.splitext(path)[1]}")
+
+
+# ── Step 2: PII redaction (runs BEFORE anything reaches the model) ────────
+
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+MY_IC_RE = re.compile(r"\b\d{6}-\d{2}-\d{4}\b")
+PHONE_RE = re.compile(r"\b(?:\+?60|0)1\d[-\s]?\d{3,4}[-\s]?\d{4}\b")
+
+# NOTE: no bare 12-digit rule on purpose. Malaysian company registration
+# numbers under the Companies Act 2016 are 12 digits (YYYYNNNNNNNN) and
+# sit on the cover of every set of financial statements — redacting them
+# destroys the identity of the entity being audited, and they are not
+# personal data.
+
+# Name detection, layered (regex alone cannot catch names — say this
+# limitation out loud in the pitch; it reads as honest, not weak):
+#   1. KNOWN_NAMES        — hand-listed names for the demo document
+#   2. PDF /Author        — pulled from metadata per-run (see analyze)
+#   3. "Prepared by" cues — signature-block lines name the preparer
+#   4. Honorific + name   — Datuk/Dato'/Tan Sri/Encik/Puan/Mr/Dr...
+#   5. bin/binti, a/l a/p — Malay & Indian patronymics, any casing,
+#                            which cover ALL-CAPS signature blocks
+# Residual gap: a bare Chinese or Western name with no title, cue, or
+# patronymic (e.g. "LIM CHEE KEONG" alone on a line) is NOT caught.
+KNOWN_NAMES: list[str] = [
+    "Ahmad Bin Ali",
+]
+
+_NAME_WORD = r"[A-Z][\w'.@-]*"
+HONORIFIC_RE = re.compile(
+    r"\b(?:Mr|Ms|Mrs|Dr|Ir|Tun|Tan\s+Sri|Puan\s+Sri|Toh\s+Puan|Datuk\s+Seri|"
+    r"Dato'?\s+Sri|Datuk|Dato'?|Datin|Encik|Puan|Cik|Tuan|Haji|Hajah)\.?\s+"
+    rf"{_NAME_WORD}(?:\s+(?:{_NAME_WORD}|bin|binti|a/l|a/p)){{0,4}}"
+)
+CUE_RE = re.compile(
+    r"\b((?:Prepared|Reviewed|Approved|Signed|Certified|Audited)\s+by[:\s]+)"
+    rf"({_NAME_WORD}(?:\s+(?:{_NAME_WORD}|bin|binti|a/l|a/p)){{0,4}})"
+)
+PATRONYMIC_RE = re.compile(
+    r"\b[A-Za-z][\w'@-]*(?:\s+[A-Za-z][\w'@-]*)*"
+    r"\s+(?:bin|binti|a/l|a/p)\s+"
+    r"[A-Za-z][\w'@-]*(?:\s+[A-Za-z][\w'@-]*)*\b",
+    re.IGNORECASE,
+)
+
+
+def _valid_ic_date(match: re.Match) -> bool:
+    """First six NRIC digits must be a plausible YYMMDD — this is what
+    keeps invoice/reference numbers shaped like 123456-78-9012 from
+    being falsely redacted."""
+    digits = match.group(0)
+    month, day = int(digits[2:4]), int(digits[4:6])
+    return 1 <= month <= 12 and 1 <= day <= 31
+
+
+def redact(text: str, extra_names: list[str] | None = None) -> tuple[str, int]:
+    """Scrub PII. Returns (clean_text, items_redacted)."""
+    count = 0
+
+    for name in [*KNOWN_NAMES, *(extra_names or [])]:
+        text, n = re.subn(re.escape(name), "[NAME_REDACTED]", text, flags=re.IGNORECASE)
+        count += n
+
+    text, n = CUE_RE.subn(lambda m: m.group(1) + "[NAME_REDACTED]", text)
+    count += n
+    text, n = HONORIFIC_RE.subn("[NAME_REDACTED]", text)
+    count += n
+    text, n = PATRONYMIC_RE.subn("[NAME_REDACTED]", text)
+    count += n
+
+    # NRIC with date validation: only real YYMMDD prefixes are redacted.
+    ic_hits = 0
+
+    def _ic_repl(m: re.Match) -> str:
+        nonlocal ic_hits
+        if _valid_ic_date(m):
+            ic_hits += 1
+            return "[IC_REDACTED]"
+        return m.group(0)
+
+    text = MY_IC_RE.sub(_ic_repl, text)
+    count += ic_hits
+
+    for pattern, token in (
+        (EMAIL_RE, "[EMAIL_REDACTED]"),
+        (PHONE_RE, "[PHONE_REDACTED]"),
+    ):
+        text, n = pattern.subn(token, text)
+        count += n
+    return text, count
+
+
+# ── Step 3: LLM call (Gemini free tier, strict JSON, demo-safety fallback) ─
+
+SYSTEM_PROMPT = """You analyse financial reports. Reply with a single JSON
+object and nothing else.
+
+Schema:
+{
+  "answer": "your natural-language answer to the user's question",
+  "facts": [
+    {"id": "f1", "claim": "short label", "value": 1200000,
+     "page": "Page 1", "quote": "the exact line copied from the document"}
+  ],
+  "checks": [
+    {"description": "what this verifies",
+     "operation": "sum",
+     "operand_fact_ids": ["f1", "f2"],
+     "expected_value": 2400000}
+  ]
+}
+
+Rules:
+- "value" and "expected_value" must be plain numbers with no commas, no
+  currency symbols, and no quotes around them.
+- "operation" must be exactly one of: sum, difference, percent_change.
+- Every number you state in "answer" MUST appear in "facts" with the real
+  page or sheet name and a quote copied verbatim from the document.
+- Whenever your answer relies on arithmetic, add a check for it. If the
+  document states a total, ALWAYS add a check comparing it to the sum of
+  its line items.
+- Never invent a quote. If a number is not in the document, say so.
+"""
+
+
+def _extract_json(raw: str) -> dict:
+    """Pull a JSON object out of model output, tolerating fences/preamble."""
+    raw = raw.strip()
+    raw = re.sub(r"^```(?:json)?", "", raw).strip()
+    raw = re.sub(r"```$", "", raw).strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(raw[start : end + 1])
+        raise
+
+
+def _call_gemini(pages: list[tuple[str, str]], question: str) -> dict:
+    """Raw call to Gemini. Raises on ANY failure: missing dependency,
+    missing API key, network error, or unparsable output. Deliberately
+    has no fallback logic of its own — ask_llm() owns that, so a missing
+    key is caught by the same safety net as a live network failure."""
+    try:
+        from google import genai
+    except ImportError:
+        raise RuntimeError(
+            "google-genai is not installed. Run: uv add google-genai"
+        )
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not set. Get a free key at "
+            "aistudio.google.com and put it in your .env file."
+        )
+
+    client = genai.Client(api_key=api_key)
+    doc = "\n\n".join(f"--- {label} ---\n{text}" for label, text in pages)
+    resp = client.models.generate_content(
+        model=MODEL,
+        contents=f"{SYSTEM_PROMPT}\n\nDOCUMENT:\n{doc}\n\nQUESTION: {question}",
+        config={"response_mime_type": "application/json"},
+    )
+    return _extract_json(resp.text)
+
+
+def _load_cached_response() -> dict:
+    """Load the demo-safety cached response used when DEMO_FALLBACK=1."""
+    path = os.path.join(os.path.dirname(__file__), "fixtures", "cached_response.json")
+    with open(path) as fh:
+        return json.load(fh)
+
+
+def ask_llm(pages: list[tuple[str, str]], question: str) -> tuple[dict, bool]:
+    """Send redacted document to Gemini. Returns (parsed JSON dict, cached).
+
+    `cached` is True only when the DEMO_FALLBACK substitution fired — the
+    UI shows an amber banner in that case, so a replayed fixture can never
+    silently impersonate a live extraction.
+
+    If DEMO_FALLBACK=1 in the environment, ANY failure from
+    _call_gemini() — including a missing API key, not just a live
+    network error — is caught and a cached response is returned instead
+    of raising. This is NOT general retry logic: it is a single, narrow
+    substitution for one demo document, meant to be enabled only in the
+    few minutes before walking on stage. DEMO_FALLBACK must stay "0"
+    during normal development so real failures still look like real
+    failures.
+    """
+    try:
+        return _call_gemini(pages, question), False
+    except Exception as e:
+        if os.environ.get("DEMO_FALLBACK") == "1":
+            return _load_cached_response(), True
+        raise RuntimeError(f"Model call failed: {e}")
+
+
+# ── Step 4: Deterministic verification (no eval, ever) ────────────────────
+
+def _to_number(value):
+    """Coerce model output into a float, or None."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = re.sub(r"[^\d.\-]", "", value)
+        if cleaned not in ("", "-", ".", "-."):
+            try:
+                return float(cleaned)
+            except ValueError:
+                return None
+    return None
+
+
+def verify(facts: list, checks: list) -> list[dict]:
+    """Independently recompute every calculation the model asserted."""
+    by_id = {}
+    for f in facts or []:
+        if isinstance(f, dict) and f.get("id") is not None:
+            by_id[str(f["id"])] = f
+
+    results = []
+    for check in checks or []:
+        if not isinstance(check, dict):
+            continue
+
+        row = {
+            "description": check.get("description", "(no description)"),
+            "expected": _to_number(check.get("expected_value")),
+            "actual": None,
+            "passed": False,
+            "error": None,
+        }
+
+        ids = check.get("operand_fact_ids") or []
+        if not isinstance(ids, list) or not ids:
+            row["error"] = "check listed no facts to verify against"
+            results.append(row)
+            continue
+
+        values, missing = [], []
+        for fid in ids:
+            fact = by_id.get(str(fid))
+            num = _to_number(fact.get("value")) if isinstance(fact, dict) else None
+            if num is None:
+                missing.append(str(fid))
+            else:
+                values.append(num)
+
+        if missing:
+            row["error"] = f"referenced unusable fact(s): {', '.join(missing)}"
+            results.append(row)
+            continue
+
+        op = str(check.get("operation", "")).lower()
+        if op == "sum":
+            row["actual"] = sum(values)
+        elif op == "difference":
+            row["actual"] = values[0] - sum(values[1:])
+        elif op == "percent_change":
+            if len(values) < 2:
+                row["error"] = "percent_change needs two facts"
+            elif values[0] == 0:
+                row["error"] = "cannot compute percent change from zero"
+            else:
+                row["actual"] = round(
+                    (values[1] - values[0]) / values[0] * 100, 2
+                )
+        else:
+            row["error"] = f"unsupported operation: {op or '(missing)'}"
+
+        if row["error"] is None and row["expected"] is None:
+            row["error"] = "model did not state an expected value"
+
+        if row["error"] is None and row["actual"] is not None:
+            row["passed"] = abs(row["actual"] - row["expected"]) < 0.01
+
+        results.append(row)
+
+    return results
+
+
+# ── Step 4b: Anti-hallucination citation check ─────────────────────────────
+
+def _fact_in_source(fact: dict, redacted_pages: list[tuple[str, str]]) -> bool:
+    """True if this fact's quote actually appears, verbatim, in a page it
+    could plausibly cite. This is what lets the UI show a genuine warning
+    when the model paraphrased instead of quoting — a stronger
+    explainability claim than a page number alone."""
+    quote = (fact.get("quote") or "").strip()
+    if not quote:
+        return False
+    return any(quote in text for _, text in redacted_pages)
+
+
+# ── Step 4c: Session hygiene ───────────────────────────────────────────────
+
+def purge_upload(path: str | None) -> bool:
+    """Delete an uploaded temp file — but ONLY if it lives inside Gradio's
+    temp directory. A path anywhere else (the user's own document, our
+    sample_report.pdf) is refused: this function must never be able to
+    destroy a file the user did not stage through the upload box.
+    Wired to the UI's Clear Session button — that is what makes the
+    retention claim in the interface true rather than aspirational."""
+    if not path:
+        return False
+    gradio_tmp = os.environ.get("GRADIO_TEMP_DIR") or os.path.join(
+        tempfile.gettempdir(), "gradio"
+    )
+    try:
+        real = os.path.realpath(path)
+        root = os.path.realpath(gradio_tmp)
+        if real.startswith(root + os.sep) and os.path.isfile(real):
+            os.remove(real)
+            return True
+    except OSError:
+        pass
+    return False
+
+
+# ── Step 5: Main entry point ──────────────────────────────────────────────
+
+def _clean_facts(facts) -> list[dict]:
+    """Normalise facts so the UI never crashes on weird model output."""
+    out = []
+    for f in facts or []:
+        if not isinstance(f, dict):
+            continue
+        out.append(
+            {
+                "id": str(f.get("id", "?")),
+                "claim": str(f.get("claim", "(unlabelled)")),
+                "value": _to_number(f.get("value")),
+                "page": str(f.get("page", "?")),
+                "quote": str(f.get("quote", "")).strip(),
+            }
+        )
+    return out
+
+
+def analyze(file_path: str, question: str) -> dict:
+    """Full pipeline. Never raises — errors come back in the 'error' field."""
+    result = {
+        "answer": "",
+        "facts": [],
+        "checks": [],
+        "redaction_count": 0,
+        "redacted_preview": "",
+        "fallback_used": False,
+        "summary": {"facts_extracted": 0, "checks_run": 0,
+                    "checks_passed": 0, "checks_failed": 0},
+        "error": None,
+    }
+
+    if not file_path:
+        result["error"] = "No file provided."
+        return result
+    if not question or not question.strip():
+        result["error"] = "Ask a question about the document."
+        return result
+
+    # Parse
+    try:
+        pages = parse_file(file_path)
+    except Exception as e:
+        result["error"] = f"Could not read that file: {e}"
+        return result
+
+    if not pages:
+        result["error"] = (
+            "No text found. If this is a scanned PDF, try a text-based one."
+        )
+        return result
+
+    # Redact — document metadata names join the scrub list for this run
+    extra_names = (
+        pdf_metadata_names(file_path) if file_path.lower().endswith(".pdf") else []
+    )
+    redacted, total = [], 0
+    for label, text in pages:
+        clean, n = redact(text, extra_names)
+        redacted.append((label, clean))
+        total += n
+    result["redaction_count"] = total
+    result["redacted_preview"] = "\n\n".join(
+        f"--- {label} ---\n{text}" for label, text in redacted
+    )[:2000]
+
+    # LLM (with demo-safety fallback inside ask_llm)
+    try:
+        raw, cached = ask_llm(redacted, question.strip())
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+    result["fallback_used"] = cached
+
+    if not isinstance(raw, dict):
+        result["error"] = "Model returned an unexpected shape."
+        return result
+
+    # Verify
+    result["answer"] = str(raw.get("answer", "")).strip()
+    result["facts"] = _clean_facts(raw.get("facts"))
+    for f in result["facts"]:
+        f["verified_in_source"] = _fact_in_source(f, redacted)
+    result["checks"] = verify(result["facts"], raw.get("checks"))
+
+    # Summary stats
+    checks = result["checks"]
+    result["summary"] = {
+        "facts_extracted": len(result["facts"]),
+        "checks_run": len(checks),
+        "checks_passed": sum(1 for c in checks if c.get("passed")),
+        "checks_failed": sum(
+            1 for c in checks if not c.get("passed") and not c.get("error")
+        ),
+    }
+
+    return result
