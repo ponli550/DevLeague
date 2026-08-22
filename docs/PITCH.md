@@ -1,10 +1,18 @@
 # FinVerify — Pitch & Compliance Narrative (Lab 1, Experian)
 
 ## The one-liner
-LLMs are text engines, not calculators. FinVerify never trusts the model:
-every number is re-computed deterministically in Python, every quote is
-pinned verbatim to the source, and nothing renders until it has passed a
-visible CI pipeline. **You just watched a machine refuse to believe itself.**
+FinVerify never trusts the model: every number is re-computed
+deterministically, every quote pinned verbatim, and nothing renders until
+it has passed a visible CI pipeline. **You just watched a machine refuse
+to believe itself.**
+
+> Positioning note (market-checked): deterministic re-verification alone
+> is claimed territory — Trullion markets footing/cross-footing checks,
+> and the LLM-extract/deterministic-verify pattern is in the literature.
+> Do NOT pitch it as first-ever. The unclaimed bundle is: PDPA-first
+> redaction as a visible pipeline stage, the CI-gate UX where the catch
+> is shown live, and citation pinning that a judge can falsify on their
+> own document in seconds.
 
 ## Demo script (4 minutes)
 1. Upload `sample_report.pdf`. Point at the pipeline: parse → redact →
