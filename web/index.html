@@ -208,7 +208,61 @@ function renderFallbackTable(type,data){
   items.slice(0,20).forEach(it=>{rows+=`<tr><td class="mono" style="padding:6px;border:1px solid var(--line);font-size:11px;word-break:break-all">${esc(JSON.stringify(it))}</td></tr>`;});
   return `<div class="banner" style="border-color:var(--amber);color:var(--amber);background:rgba(245,158,11,.06)">⚠ ${esc(type)} failed its render gate — raw data shown instead of a broken visual</div><table style="width:100%;border-collapse:collapse;margin-bottom:16px">${rows}</table>`;
 }
+// Deterministic chart kinds. The model names ANY kind; these render
+// natively as inline SVG (dataviz rules: thin marks, 2px gaps, text in
+// ink tokens, one hue); anything else degrades to the data table.
+const CHART_KINDS={
+  bar:{gate:c=>c.points.length>=1,render:c=>{
+    const max=Math.max(...c.points.map(p=>p.value)),W=560,BH=22,G=8;
+    let y=0,rows="";
+    c.points.forEach(p=>{
+      const w=Math.max(2,Math.round((p.value/max)*(W-265)));
+      rows+=`<text x="0" y="${y+15}" fill="var(--ink-dim)" font-size="11" font-family="var(--mono)">${esc(p.label.slice(0,22))}</text>
+        <rect x="150" y="${y+3}" width="${w}" height="${BH-G}" rx="4" fill="var(--teal)"/>
+        <text x="${155+w}" y="${y+15}" fill="var(--ink)" font-size="11" font-family="var(--mono)">${fmt(p.value)}</text>`;
+      y+=BH;
+    });
+    return `<svg viewBox="0 0 ${W} ${y}" style="width:100%;max-width:${W}px">${rows}</svg>`;
+  }},
+  line:{gate:c=>c.points.length>=2,render:c=>{
+    const W=560,H=140,P=28,vs=c.points.map(p=>p.value);
+    const lo=Math.min(...vs),hi=Math.max(...vs),sp=hi-lo||1;
+    const X=i=>P+i*(W-2*P)/(c.points.length-1);
+    const Y=v=>H-P-((v-lo)/sp)*(H-2*P);
+    const path=c.points.map((p,i)=>`${i?"L":"M"}${X(i)},${Y(p.value)}`).join(" ");
+    let dots="";
+    c.points.forEach((p,i)=>{dots+=`<circle cx="${X(i)}" cy="${Y(p.value)}" r="4" fill="var(--teal)"/>
+      <text x="${X(i)}" y="${H-8}" text-anchor="middle" fill="var(--ink-faint)" font-size="10" font-family="var(--mono)">${esc(p.label.slice(0,12))}</text>`;});
+    return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px"><path d="${path}" fill="none" stroke="var(--teal)" stroke-width="2"/>${dots}</svg>`;
+  }},
+  donut:{gate:c=>c.points.length>=2&&c.points.length<=6&&c.points.every(p=>p.value>=0),render:c=>{
+    const R=56,CX=70,CY=70,total=c.points.reduce((s,p)=>s+p.value,0)||1;
+    const cols=["var(--teal)","var(--purple)","var(--info)","var(--amber)","var(--ink-dim)","var(--orange)"];
+    let a0=-Math.PI/2,segs="",legend="";
+    c.points.forEach((p,i)=>{
+      const a1=a0+(p.value/total)*2*Math.PI,large=(a1-a0)>Math.PI?1:0;
+      const x0=CX+R*Math.cos(a0),y0=CY+R*Math.sin(a0),x1=CX+R*Math.cos(a1),y1=CY+R*Math.sin(a1);
+      segs+=`<path d="M${x0},${y0} A${R},${R} 0 ${large} 1 ${x1},${y1}" fill="none" stroke="${cols[i%6]}" stroke-width="20"/>`;
+      legend+=`<div class="mono" style="font-size:11px;color:var(--ink-dim)"><span style="color:${cols[i%6]}">■</span> ${esc(p.label)} — ${fmt(p.value)} (${Math.round(p.value/total*100)}%)</div>`;
+      a0=a1+0.03;
+    });
+    return `<div style="display:flex;gap:18px;align-items:center"><svg viewBox="0 0 140 140" style="width:140px;flex:none">${segs}</svg><div>${legend}</div></div>`;
+  }},
+};
+function renderChart(c){
+  const k=CHART_KINDS[c.kind];
+  const head=`<div class="caps" style="color:var(--ink-faint);margin-bottom:8px">${esc(c.title||c.kind)} <span style="color:var(--purple)">· model-chosen ${esc(c.kind)}, drawn only from verified facts</span></div>`;
+  if(!k)return `<div class="answer" style="margin-bottom:12px;padding:12px 14px">${head}<div class="mono" style="font-size:11px;color:var(--amber);margin-bottom:6px">kind "${esc(c.kind)}" is not in the deterministic chart registry — showing the data instead</div>${renderFallbackTable(c.kind,c.points)}</div>`;
+  if(!k.gate(c))return `<div class="answer" style="margin-bottom:12px;padding:12px 14px">${head}${renderFallbackTable(c.kind,c.points)}</div>`;
+  return `<div class="answer" style="margin-bottom:12px;padding:12px 14px">${head}${k.render(c)}</div>`;
+}
 const RENDERERS={
+  charts:{gate:r=>r.charts==null||Array.isArray(r.charts),render:r=>{
+    if(!r.charts||!r.charts.length)return "";
+    let h=`<h2 class="caps section-gap">Visualizations — the model chose the form, verified facts supply the data</h2>`;
+    r.charts.forEach(c=>{h+=renderChart(c);});
+    return h;
+  }},
   insights:{gate:r=>r.insights==null||typeof r.insights==="string",render:r=>{let h="";if(r.insights){
     const items=r.insights.split("\n").map(s=>s.trim()).filter(Boolean);
     if(items.length){
@@ -287,7 +341,7 @@ const RENDERERS={
   h+=`</div></div>`;
   return h;}},
 };
-const ARTIFACT_ORDER=["insights","patterns","risks","checks","sources"];
+const ARTIFACT_ORDER=["insights","charts","patterns","risks","checks","sources"];
 function renderArtifact(type,r){
   const reg=RENDERERS[type];
   if(!reg)return `<div class="banner" style="border-color:var(--orange);color:var(--orange)">Unregistered artifact type: ${esc(type)}</div>`;
