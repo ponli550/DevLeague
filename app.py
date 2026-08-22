@@ -252,9 +252,25 @@ def render_summary(result: dict) -> str:
 </div>"""
 
 
+def render_risks(result: dict) -> str:
+    """Severity-coded risk cards, evidence ids visible — parity with the
+    primary web UI. Empty input renders nothing, not a placeholder."""
+    risks = result.get("risks") or []
+    html = ""
+    for k in risks:
+        sev = str(k.get("severity", "medium")).upper()
+        cls = {"HIGH": "mismatch-card", "MEDIUM": "warning-card"}.get(sev, "source-card")
+        ev = ", ".join(k.get("evidence_fact_ids") or [])
+        html += (f'<div class="{cls}"><strong>⚠️ {sev} RISK:</strong> '
+                 f'{k.get("description","")}<br>'
+                 f'<span style="font-size:12px;color:#64748B;">evidence: '
+                 f'<code>{ev}</code></span></div>')
+    return html
+
+
 def render_checks(result: dict) -> str:
     checks = result.get("checks") or []
-    html = ""
+    html = render_risks(result)
 
     rec = (result.get("recommendation") or "").strip()
     if rec:
