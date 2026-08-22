@@ -94,7 +94,6 @@ main{flex:1;display:flex;min-height:0}
 .override{margin-top:8px;border:1px solid rgba(153,69,255,.4);background:rgba(153,69,255,.08);color:var(--purple);font-family:var(--mono);font-size:12px;padding:8px 10px;border-radius:6px}
 .override b{color:var(--teal)}
 .arrow{width:56px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--line);font-family:var(--mono);font-size:18px}
-.ghost{width:380px;flex:none;border:1px dashed rgba(76,67,85,.6);opacity:.45;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:260px;gap:8px}
 .sources{margin-top:8px}
 .sources h2{margin-bottom:10px}
 .src-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
@@ -111,7 +110,7 @@ h2.caps{color:var(--ink-faint);font-size:11px}
 @media (prefers-reduced-motion: no-preference){
   @keyframes cardIn{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:none}}
   @keyframes drawIn{from{transform:scaleX(0)}to{transform:scaleX(1)}}
-  .flow .card,.flow .ghost{animation:cardIn .5s cubic-bezier(.2,.8,.2,1) both}
+  .flow .card{animation:cardIn .5s cubic-bezier(.2,.8,.2,1) both}
   .flow .arrow{transform-origin:left;animation:drawIn .3s ease both}
   .src{animation:cardIn .4s ease both}
 }
@@ -328,7 +327,7 @@ const RENDERERS={
     </div>`;
     if(i<r.checks.length-1)h+=`<div class="arrow" style="animation-delay:${i*140+90}ms">→</div>`;
   });
-  h+=`<div class="arrow" style="animation-delay:${r.checks.length*140}ms">→</div><div class="ghost" style="animation-delay:${r.checks.length*140+90}ms"><span style="font-size:28px;color:var(--line)">+</span><span class="caps" style="color:var(--ink-faint)">AWAITING NEXT PERIOD</span></div></div>`;
+  h+=`</div>`;
   return h;}},
   sources:{gate:r=>Array.isArray(r.facts),render:r=>{let h="";h+=`<div class="sources"><h2 class="caps">Sources — every number pinned to a verbatim quote</h2><div class="src-grid">`;
   r.facts.forEach((f,j)=>{
