@@ -345,6 +345,36 @@ finally:
         if v is not None:
             os.environ[k] = v
 
+
+# ── 17. against_fact_id — expected value must come from a cited fact ───────
+# Live-call finding: the model set expected_value to its own computed sum,
+# so a real discrepancy showed as PASS. Written BEFORE the fix.
+
+print("\n=== 17. against_fact_id ===")
+_facts = [{"id": "f1", "value": 1200000}, {"id": "f2", "value": 1150000},
+          {"id": "f3", "value": 300000},
+          {"id": "f4", "value": 2750000, "claim": "stated total"}]
+_checks = [{"description": "components vs stated total", "operation": "sum",
+            "operand_fact_ids": ["f1", "f2", "f3"],
+            "against_fact_id": "f4",
+            "expected_value": 2650000}]  # model's self-serving number — must be ignored
+r = backend.verify(_facts, _checks)
+check("expected resolves from the cited fact", r[0]["expected"] == 2750000.0,
+      f"got {r[0]['expected']}")
+check("self-graded pass becomes a caught mismatch", r[0]["passed"] is False)
+_checks2 = [{"description": "dangling ref", "operation": "sum",
+             "operand_fact_ids": ["f1"], "against_fact_id": "f99"}]
+r2 = backend.verify(_facts, _checks2)
+check("dangling against_fact_id errors, not crashes",
+      r2[0]["error"] is not None and r2[0]["passed"] is False)
+check("prompt demands against_fact_id",
+      "against_fact_id" in backend.SYSTEM_PROMPT)
+with open(os.path.join(os.path.dirname(__file__), "fixtures",
+                       "cached_response.json")) as fh:
+    _fx2 = json.load(fh)
+check("fixture exercises against_fact_id",
+      any(c.get("against_fact_id") for c in _fx2.get("checks", [])))
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
