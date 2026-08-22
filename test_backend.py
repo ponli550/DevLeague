@@ -17,6 +17,15 @@ import backend
 
 PASS, FAIL = 0, 0
 
+# Fail loudly if the sample is missing. Many sections below are gated on
+# sample_report.pdf existing; without this guard, a missing sample would
+# silently skip those checks and the suite would report a FALSE green.
+if not os.path.exists(os.path.join(os.path.dirname(__file__), "sample_report.pdf")):
+    print("ERROR: sample_report.pdf not found. Run `python make_sample.py` "
+          "first — the suite needs it and would otherwise skip tests and "
+          "report a misleading pass.")
+    sys.exit(1)
+
 
 def check(label, condition, detail=""):
     global PASS, FAIL
@@ -31,13 +40,10 @@ def check(label, condition, detail=""):
 # ── 1. PDF parsing ────────────────────────────────────────────────────────
 
 print("\n=== 1. PDF parsing ===")
-if os.path.exists("sample_report.pdf"):
-    pages = backend.parse_pdf("sample_report.pdf")
-    check("reads pages", len(pages) > 0, f"got {len(pages)}")
-    check("text is not empty", len(pages[0][1]) > 50)
-    check("contains revenue", "revenue" in pages[0][1].lower())
-else:
-    print("  WARN sample_report.pdf not found — run make_sample.py first")
+pages = backend.parse_pdf("sample_report.pdf")
+check("reads pages", len(pages) > 0, f"got {len(pages)}")
+check("text is not empty", len(pages[0][1]) > 50)
+check("contains revenue", "revenue" in pages[0][1].lower())
 
 # ── 2. XLSX parsing ───────────────────────────────────────────────────────
 

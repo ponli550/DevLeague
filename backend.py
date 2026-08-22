@@ -98,7 +98,7 @@ PHONE_RE = re.compile(r"\b(?:\+?60|0)1\d[-\s]?\d{3,4}[-\s]?\d{4}\b")
 
 # Name detection, layered (regex alone cannot catch names — say this
 # limitation out loud in the pitch; it reads as honest, not weak):
-#   1. KNOWN_NAMES        — hand-listed names for the demo document
+#   1. KNOWN_NAMES        — extra names supplied at runtime (see below)
 #   2. PDF /Author        — pulled from metadata per-run (see analyze)
 #   3. "Prepared by" cues — signature-block lines name the preparer
 #   4. Honorific + name   — Datuk/Dato'/Tan Sri/Encik/Puan/Mr/Dr...
@@ -106,8 +106,15 @@ PHONE_RE = re.compile(r"\b(?:\+?60|0)1\d[-\s]?\d{3,4}[-\s]?\d{4}\b")
 #                            which cover ALL-CAPS signature blocks
 # Residual gap: a bare Chinese or Western name with no title, cue, or
 # patronymic (e.g. "LIM CHEE KEONG" alone on a line) is NOT caught.
+#
+# KNOWN_NAMES is EMPTY by default — no personal name is baked into the
+# source. The demo preparer ("Prepared by Ahmad Bin Ali") is already
+# caught by the cue and patronymic layers, so no hardcode is needed. If a
+# deployment needs to force-scrub specific names, set FINVERIFY_KNOWN_NAMES
+# to a comma-separated list; it is read at import time only.
 KNOWN_NAMES: list[str] = [
-    "Ahmad Bin Ali",
+    n.strip() for n in os.environ.get("FINVERIFY_KNOWN_NAMES", "").split(",")
+    if n.strip()
 ]
 
 _NAME_WORD = r"[A-Z][\w'.@-]*"
