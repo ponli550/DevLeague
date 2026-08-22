@@ -796,6 +796,106 @@ check("fixture recommendation loads without mojibake",
       "â€" not in _rec and "—" in _fx4.get("answer", ""))
 
 
+# ── 25. bounded retry before fallback (#34) — written BEFORE the code ──────
+
+print("\n=== 25. bounded retry ===")
+import inspect as _insp
+_calls = {"n": 0}
+_orig = backend._call_deepseek
+def _flaky(pages, q):
+    _calls["n"] += 1
+    if _calls["n"] == 1:
+        raise RuntimeError("transient network blip")
+    return {"answer": "x"}
+backend._call_deepseek = _flaky
+try:
+    _out, _cached = backend.ask_llm([("Page 1", "t")], "q")
+    check("one transient failure is retried and succeeds",
+          _out == {"answer": "x"} and _cached is False and _calls["n"] == 2,
+          f"calls={_calls['n']}")
+    _calls["n"] = 0
+    def _dead(pages, q):
+        _calls["n"] += 1
+        raise RuntimeError("hard down")
+    backend._call_deepseek = _dead
+    _oldfb = os.environ.pop("DEMO_FALLBACK", None)
+    try:
+        try:
+            backend.ask_llm([("Page 1", "t")], "q")
+            check("double failure raises", False)
+        except RuntimeError as e:
+            check("double failure raises after exactly 2 attempts",
+                  _calls["n"] == 2, f"calls={_calls['n']}")
+            check("error names the retry", "retry" in str(e).lower(), str(e))
+        _calls["n"] = 0
+        os.environ["DEMO_FALLBACK"] = "1"
+        _out, _cached = backend.ask_llm([("Page 1", "t")], "q")
+        check("fallback engages only after the retry",
+              _cached is True and _calls["n"] == 2, f"calls={_calls['n']}")
+    finally:
+        os.environ.pop("DEMO_FALLBACK", None)
+        if _oldfb is not None:
+            os.environ["DEMO_FALLBACK"] = _oldfb
+finally:
+    backend._call_deepseek = _orig
+check("client call carries an explicit timeout",
+      "timeout" in _insp.getsource(backend._call_deepseek))
+
+
+# ── 26. golden XLSX fixture (#33) — written BEFORE the code ────────────────
+
+print("\n=== 26. golden XLSX ===")
+import hashlib as _hl
+check("make_sample exposes an xlsx generator",
+      hasattr(__import__("make_sample"), "build_xlsx"))
+if hasattr(__import__("make_sample"), "build_xlsx"):
+    import make_sample as _ms
+    _xp = os.path.join(tempfile.gettempdir(), "_golden_check.xlsx")
+    _ms.build_xlsx(_xp)
+    _sheets = backend.parse_xlsx(_xp)
+    _text = "\n".join(t for _, t in _sheets)
+    _sha = _hl.sha256(_text.encode()).hexdigest()
+    with open(os.path.join(os.path.dirname(__file__), "fixtures",
+                           "golden_xlsx.json")) as fh:
+        _g = json.load(fh)
+    check("parsed text matches the golden sha", _sha == _g["text_sha256"],
+          f"got {_sha[:16]}")
+    _clean, _n = backend.redact(_text)
+    check("golden redaction count matches", _n == _g["redaction_count"],
+          f"got {_n}")
+    check("xlsx carries the same planted discrepancy",
+          "2,750,000" in _text or "2750000" in _text)
+    os.remove(_xp)
+
+
+# ── 27. Gradio app risks parity (#32) — written BEFORE the code ────────────
+
+print("\n=== 27. Gradio risks parity ===")
+try:
+    import app as _app
+    check("app.py imports (CI now guards the Gradio UI)", True)
+except Exception as _e:
+    check("app.py imports (CI now guards the Gradio UI)", False, str(_e))
+    _app = None
+if _app is not None:
+    check("app exposes render_risks", hasattr(_app, "render_risks"))
+    if hasattr(_app, "render_risks"):
+        _html = _app.render_risks({"risks": [
+            {"description": "Total does not reconcile", "severity": "high",
+             "evidence_fact_ids": ["f1", "f4"]}]})
+        check("risk description and evidence rendered",
+              "Total does not reconcile" in _html and "f1" in _html)
+        check("severity is visible as text, not color alone",
+              "high" in _html.lower())
+        # In the current layout risks have their own panel, so an empty
+        # risk set renders a positive "no risks flagged" confirmation
+        # rather than nothing — it must not render a phantom risk card.
+        _empty_html = _app.render_risks({"risks": []})
+        check("no risks -> a positive confirmation, no phantom risk card",
+              "risk-card" not in _empty_html and "reconcile" in _empty_html.lower())
+    check("FAKE payload carries risks for UI development",
+          bool(_app.FAKE.get("risks")))
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")

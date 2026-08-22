@@ -12,3 +12,8 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "reportlab>=5.0.1",
 ]
+
+[dependency-groups]
+dev = [
+    "playwright>=1.62.0",
+]
