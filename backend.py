@@ -614,12 +614,98 @@ def verify_patterns(facts: list, patterns: list) -> list[dict]:
     return rows
 
 
+def _audit_key() -> bytes:
+    """Server-held HMAC key. Explicit via AUDIT_HMAC_KEY; otherwise a
+    per-process random key — signatures then prove integrity within a
+    session, which is exactly the retention story (nothing persists)."""
+    k = os.environ.get("AUDIT_HMAC_KEY")
+    if k:
+        return k.encode()
+    global _EPHEMERAL_AUDIT_KEY
+    try:
+        return _EPHEMERAL_AUDIT_KEY
+    except NameError:
+        import secrets
+        _EPHEMERAL_AUDIT_KEY = secrets.token_bytes(32)
+        return _EPHEMERAL_AUDIT_KEY
+
+
+def _event_canonical(event: dict) -> str:
+    """Canonical form of an event for hashing: hash-fields stripped, the
+    release result folded to its own digest so the chain covers it
+    without embedding megabytes."""
+    import hashlib
+    row = {k: v for k, v in event.items()
+           if k not in ("prev_hash", "row_hash", "sig")}
+    if row.get("result") is not None:
+        body = {k: v for k, v in row["result"].items()
+                if k != "audit_log_root"}
+        row["result"] = hashlib.sha256(
+            json.dumps(body, sort_keys=True,
+                       separators=(",", ":")).encode()).hexdigest()
+    return json.dumps(row, sort_keys=True, separators=(",", ":"))
+
+
+def _chain_events(events):
+    """Wrap raw pipeline events into a hash chain: row_hash =
+    sha256(prev_hash + canonical(row)), sig = HMAC(key, row_hash)."""
+    import hashlib
+    import hmac as hmac_lib
+    prev = ""
+    key = _audit_key()
+    for event in events:
+        row_hash = hashlib.sha256(
+            (prev + _event_canonical(event)).encode()).hexdigest()
+        if event.get("stage") == "release" and event.get("result") is not None:
+            # The chain root IS this row's hash; it cannot cover itself,
+            # so canonicalization strips the field before hashing and we
+            # stamp it afterwards. Verification strips it identically.
+            event["result"]["audit_log_root"] = row_hash
+        event["prev_hash"] = prev
+        event["row_hash"] = row_hash
+        event["sig"] = hmac_lib.new(key, row_hash.encode(),
+                                    hashlib.sha256).hexdigest()
+        prev = row_hash
+        yield event
+
+
+def verify_audit_chain(events) -> bool:
+    """True iff the chain is intact: every row_hash recomputes from its
+    predecessor and every sig verifies. Any mutation or reorder fails."""
+    import hashlib
+    import hmac as hmac_lib
+    key = _audit_key()
+    prev = ""
+    for event in events:
+        if event.get("prev_hash") != prev:
+            return False
+        expected = hashlib.sha256(
+            (prev + _event_canonical(event)).encode()).hexdigest()
+        if event.get("row_hash") != expected:
+            return False
+        if not hmac_lib.compare_digest(
+                event.get("sig", ""),
+                hmac_lib.new(key, expected.encode(),
+                             hashlib.sha256).hexdigest()):
+            return False
+        prev = expected
+    return True
+
+
 PIPELINE_STAGES = ["parse", "redact", "extract",
                    "verify-math", "verify-citations",
                    "analyse-patterns", "release"]
 
 
 def analyze_stream(file_path: str, question: str):
+    """Chained public face of the pipeline: every event the user watches
+    is hash-chained and HMAC-signed (see verify_audit_chain), so the
+    telemetry itself is tamper-evident — the PDPA story, enforced rather
+    than labeled."""
+    yield from _chain_events(_analyze_events(file_path, question))
+
+
+def _analyze_events(file_path: str, question: str):
     """In-product CI: the pipeline the user watches. Yields one event per
     stage transition — {"stage", "status": running|ok|fail|skip,
     "detail", "elapsed_ms", "result"} — and releases the result only in
