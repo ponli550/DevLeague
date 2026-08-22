@@ -42,6 +42,13 @@
       "value": 10.0,
       "page": "Page 2",
       "quote": "Revenue growth vs prior quarter: 10.0%"
+    },
+    {
+      "id": "f7",
+      "claim": "Total operating expenses",
+      "value": 1450000,
+      "page": "Page 1",
+      "quote": "Total operating expenses 1,450,000"
     }
   ],
   "checks": [
@@ -78,9 +85,9 @@
     },
     {
       "kind": "ratio",
-      "description": "Services revenue relative to product revenue.",
-      "operand_fact_ids": ["f2", "f1"],
-      "evidence_fact_ids": ["f1", "f2"]
+      "description": "Operating expenses as a share of total revenue (opex-to-revenue).",
+      "operand_fact_ids": ["f7", "f4"],
+      "evidence_fact_ids": ["f7", "f4"]
     }
   ],
   "risks": [

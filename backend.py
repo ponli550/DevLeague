@@ -225,8 +225,11 @@ Rules:
       operand_fact_ids and the total in against_fact_id (e.g. product
       revenue as a share of total revenue).
     * ratio — one figure over another as a percentage. Put the two facts
-      in operand_fact_ids [numerator, denominator] (e.g. total operating
-      expenses over total revenue).
+      in operand_fact_ids [numerator, denominator]. ALWAYS include these
+      standard financial ratios when the facts exist: opex-to-revenue
+      (total operating expenses / total revenue) and, if cost of sales
+      or COGS is present, gross margin ((revenue - COGS) / revenue via a
+      gross-profit fact / revenue).
     * sign — a figure that is negative or zero where a positive is
       expected (e.g. a negative net profit). Put that one fact in
       operand_fact_ids.
@@ -251,7 +254,7 @@ Rules:
 def _extract_json(raw: str) -> dict:
     """Pull a JSON object out of model output, tolerating fences/preamble."""
     raw = raw.strip()
-    raw = re.sub(r"^```(?:json)?", "", raw).strip()
+    raw = re.sub(r"^```(?:json)?", "", raw, flags=re.IGNORECASE).strip()
     raw = re.sub(r"```$", "", raw).strip()
     try:
         return json.loads(raw)
@@ -299,7 +302,10 @@ def _call_deepseek(pages: list[tuple[str, str]], question: str) -> dict:
 def _load_cached_response() -> dict:
     """Load the demo-safety cached response used when DEMO_FALLBACK=1."""
     path = os.path.join(os.path.dirname(__file__), "fixtures", "cached_response.json")
-    with open(path) as fh:
+    # Explicit UTF-8: the fixture contains em-dashes and other non-ASCII
+    # punctuation, and Python's default encoding on Windows is cp1252,
+    # which mangles them into mojibake ("— " -> "â€"").
+    with open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -330,16 +336,25 @@ def ask_llm(pages: list[tuple[str, str]], question: str) -> tuple[dict, bool]:
 # ── Step 4: Deterministic verification (no eval, ever) ────────────────────
 
 def _to_number(value):
-    """Coerce model output into a float, or None."""
+    """Coerce model output into a float, or None.
+
+    Financial statements write negatives in parentheses — "(50,000)"
+    means -50,000. We detect the brackets BEFORE stripping punctuation,
+    because the regex below would otherwise discard them and turn a loss
+    into a gain (a real correctness hazard for a verifier)."""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     if isinstance(value, str):
-        cleaned = re.sub(r"[^\d.\-]", "", value)
+        s = value.strip()
+        # Accounting-style negative: a fully bracketed number.
+        negate = bool(re.fullmatch(r"\(\s*[\d,.\s]+\s*\)", s))
+        cleaned = re.sub(r"[^\d.\-]", "", s)
         if cleaned not in ("", "-", ".", "-."):
             try:
-                return float(cleaned)
+                num = float(cleaned)
             except ValueError:
                 return None
+            return -abs(num) if negate else num
     return None
 
 
@@ -362,6 +377,14 @@ def verify(facts: list, checks: list) -> list[dict]:
             "actual": None,
             "passed": False,
             "error": None,
+            # Display-only trust-story fields. "model_stated" preserves the
+            # number the MODEL typed as expected_value; "overridden" is True
+            # when the anti-cheat replaced it with a different figure pinned
+            # to a cited fact. Neither affects "expected" or "passed" — they
+            # exist purely so the UI can show "the model claimed X, we
+            # ignored it and recomputed against Y".
+            "model_stated": _to_number(check.get("expected_value")),
+            "overridden": False,
         }
 
         # A cited fact beats a free-typed expected_value: the model once
@@ -376,6 +399,11 @@ def verify(facts: list, checks: list) -> list[dict]:
                 row["error"] = f"against_fact_id references unknown fact: {against}"
                 results.append(row)
                 continue
+            # Record the override for the trust story: the model typed one
+            # number, but we are using the cited fact's figure instead.
+            if (row["model_stated"] is not None
+                    and abs(row["model_stated"] - target_val) >= 0.01):
+                row["overridden"] = True
             row["expected"] = target_val
 
         ids = check.get("operand_fact_ids") or []
@@ -689,7 +717,9 @@ def analyze_stream(file_path: str, question: str):
         result["answer"] = str(raw.get("answer", "")).strip()
         result["recommendation"] = str(raw.get("recommendation", "")).strip()
         result["facts"] = _clean_facts(raw.get("facts"))
+        _raw_risks = [r for r in (raw.get("risks") or []) if isinstance(r, dict)]
         result["risks"] = _clean_risks(raw.get("risks"), result["facts"])
+        _risks_dropped = len(_raw_risks) - len(result["risks"])
         result["checks"] = verify(result["facts"], raw.get("checks"))
         checks = result["checks"]
         result["summary"] = {
@@ -708,10 +738,12 @@ def analyze_stream(file_path: str, question: str):
         )
         ms = int((_time.perf_counter() - t0) * 1000)
         s = result["summary"]
+        _sup = (f"; suppressed {_risks_dropped} unsupported risk(s)"
+                if _risks_dropped > 0 else "")
         yield {"stage": "verify-math", "status": "ok",
                "detail": (f"{s['checks_run']} check(s): "
                           f"{s['checks_passed']} pass, "
-                          f"{s['checks_failed']} mismatch"),
+                          f"{s['checks_failed']} mismatch{_sup}"),
                "elapsed_ms": ms, "result": None}
 
     # ── verify-citations ───────────────────────────────────────────────
@@ -741,20 +773,25 @@ def analyze_stream(file_path: str, question: str):
         ev = _stage("analyse-patterns")
         yield ev
         t0 = _time.perf_counter()
+        _raw_pats = [p for p in (raw.get("patterns") or [])
+                     if isinstance(p, dict)]
         result["patterns"] = verify_patterns(result["facts"],
                                              raw.get("patterns"))
         pats = result["patterns"]
         p_ok = sum(1 for p in pats if p.get("passed"))
         p_unver = sum(1 for p in pats if p.get("error"))
+        _pats_dropped = len(_raw_pats) - len(pats)
         # Rebuild insights now that verified patterns exist.
         result["insights"] = build_insights(
             result["facts"], result["checks"], result["risks"],
             result["summary"], result["patterns"]
         )
         ms = int((_time.perf_counter() - t0) * 1000)
+        _psup = (f"; suppressed {_pats_dropped} uncited pattern(s)"
+                 if _pats_dropped > 0 else "")
         yield {"stage": "analyse-patterns", "status": "ok",
                "detail": (f"{len(pats)} pattern(s): {p_ok} confirmed, "
-                          f"{p_unver} unverifiable"),
+                          f"{p_unver} unverifiable{_psup}"),
                "elapsed_ms": ms, "result": None}
 
     # ── release ────────────────────────────────────────────────────────
@@ -897,8 +934,13 @@ def build_insights(facts: list, checks: list, risks: list,
                 lines.append(f"Pattern verified ({desc}): "
                              f"{_fmt_num(act)}% — recomputed in Python.")
             elif kind in ("sign", "threshold") and act is not None:
-                lines.append(f"Pattern verified ({desc}): value is "
-                             f"{_fmt_num(act)} — confirmed in the data.")
+                # A confirmed sign/threshold pattern means the flagged
+                # ADVERSE condition actually holds — frame it as a flag,
+                # not a reassuring "verified", so the reader reads it as
+                # the warning it is.
+                lines.append(f"Flag confirmed ({desc}): value is "
+                             f"{_fmt_num(act)} — the flagged condition "
+                             f"holds in the data.")
             else:
                 lines.append(f"Pattern verified: {desc}.")
 

@@ -719,6 +719,83 @@ if os.path.exists("sample_report.pdf"):
         os.environ.pop("DEMO_FALLBACK", None)
 
 
+# ── 24. Improvement batch: negatives, fences, anti-cheat visibility, ───────
+#     suppressed counts, opex ratio, flag wording, UTF-8. Written to lock
+#     the senior-approved improvements A/C/B/H/I/F.
+
+print("\n=== 24. Improvement batch ===")
+
+# A — accounting-parentheses negatives.
+check("bracketed number is negative", backend._to_number("(50,000)") == -50000.0)
+check("bracketed decimal is negative",
+      abs(backend._to_number("(1,234.50)") - (-1234.5)) < 0.001)
+check("plain number stays positive", backend._to_number("1,200,000") == 1200000.0)
+check("currency-prefixed stays positive", backend._to_number("RM 2,750,000") == 2750000.0)
+check("a bracketed negative flips a difference",
+      backend.verify(
+          [{"id": "f1", "value": 100000}, {"id": "f2", "value": "(30,000)"}],
+          [{"description": "d", "operation": "sum",
+            "operand_fact_ids": ["f1", "f2"], "expected_value": 70000}]
+      )[0]["actual"] == 70000.0)
+
+# C — case-insensitive fence strip.
+check("uppercase JSON fence is stripped",
+      backend._extract_json('```JSON\n{"answer":"x"}\n```').get("answer") == "x")
+
+# H — anti-cheat visibility. The model's typed number is preserved for
+# display, the override is flagged, but expected/passed are UNCHANGED.
+_hf = [{"id": "f1", "value": 1200000}, {"id": "f2", "value": 1150000},
+       {"id": "f3", "value": 300000}, {"id": "f4", "value": 2750000}]
+_hc = [{"description": "components vs stated", "operation": "sum",
+        "operand_fact_ids": ["f1", "f2", "f3"], "against_fact_id": "f4",
+        "expected_value": 2650000}]  # model's self-serving number
+_hr = backend.verify(_hf, _hc)[0]
+check("model_stated preserves the model's typed number",
+      _hr["model_stated"] == 2650000.0)
+check("overridden flags the anti-cheat substitution", _hr["overridden"] is True)
+check("expected still comes from the cited fact (invariant)",
+      _hr["expected"] == 2750000.0)
+check("passed logic unchanged by the display field", _hr["passed"] is False)
+# No override flag when the model's number agrees with the cited fact.
+_hr2 = backend.verify(
+    [{"id": "f1", "value": 100}, {"id": "f2", "value": 200}, {"id": "f3", "value": 300}],
+    [{"description": "d", "operation": "sum", "operand_fact_ids": ["f1", "f2"],
+      "against_fact_id": "f3", "expected_value": 300}])[0]
+check("no override when model agrees with the cited figure",
+      _hr2["overridden"] is False)
+
+# I — suppressed-claim counts surface in the stage detail, not the summary.
+check("summary dict has no suppressed keys (invariant)",
+      set(backend._empty_result()["summary"].keys())
+      == {"facts_extracted", "checks_run", "checks_passed", "checks_failed"})
+
+# F — the fixture now exercises an opex-to-revenue ratio pattern.
+with open(os.path.join(os.path.dirname(__file__), "fixtures",
+                       "cached_response.json"), encoding="utf-8") as fh:
+    _fx4 = json.load(fh)
+check("prompt demands opex-to-revenue ratio",
+      "opex-to-revenue" in backend.SYSTEM_PROMPT.lower()
+      or "opex" in backend.SYSTEM_PROMPT.lower())
+check("fixture carries a ratio pattern",
+      any(p.get("kind") == "ratio" for p in _fx4.get("patterns", [])))
+
+# B — a confirmed sign/threshold pattern reads as a FLAG, not a reassuring
+# "verified". (Presentation wording; verify() passed logic is unchanged.)
+_flag = backend.build_insights(
+    [{"id": "f1", "value": -50000}], [], [],
+    {"facts_extracted": 1, "checks_run": 0},
+    [{"kind": "sign", "description": "net loss", "actual": -50000.0,
+      "passed": True, "error": None, "evidence_fact_ids": ["f1"]}])
+check("sign pattern insight is framed as a flag", "Flag confirmed" in _flag)
+check("sign pattern insight is not reassuring 'verified'",
+      "Pattern verified" not in _flag)
+
+# UTF-8 regression: the fixture loads without mojibake (the em-dash bug).
+_rec = str(_fx4.get("recommendation", ""))
+check("fixture recommendation loads without mojibake",
+      "â€" not in _rec and "—" in _fx4.get("answer", ""))
+
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
