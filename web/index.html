@@ -119,6 +119,9 @@ h2.caps{color:var(--ink-faint);font-size:11px}
 .stat-tile .n{font-family:var(--mono);font-size:26px;font-weight:700;color:var(--teal)}
 .stat-tile .n.bad{color:var(--orange)} .stat-tile .n.dim{color:var(--ink-dim)}
 .stat-tile .l{font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--ink-faint);text-transform:uppercase;margin-top:2px}
+.stat-tile{position:relative}
+.info{position:absolute;top:8px;right:10px;width:15px;height:15px;border:1px solid var(--ink-faint);border-radius:50%;color:var(--ink-faint);font-family:var(--mono);font-size:10px;line-height:14px;text-align:center;cursor:help}
+.info:hover{color:var(--teal);border-color:var(--teal)}
 .section-gap{margin-bottom:16px}
 @media (prefers-reduced-motion: no-preference){
   @keyframes cardIn{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:none}}
@@ -324,6 +327,13 @@ function T(span,inner){return inner?`<div class="tile t${span}">${inner}</div>`:
 const RENDERERS={
   kpis:{gate:r=>r.summary&&typeof r.summary==="object",render:r=>{
     const s=r.summary;
+    const kpi_info={
+      "facts extracted":"Figures the model pulled from the document that survived cleaning — each must be numeric and carry a citation.",
+      "checks verified":"Arithmetic claims recomputed in Python that matched the figure the DOCUMENT states (never a number the model computed itself).",
+      "mismatches":"Recomputed arithmetic that disagrees with the stated figure — the exact discrepancies a manual review is meant to catch.",
+      "PII masked":"Personal identifiers redacted locally before any text reached the model: NRIC (date-validated), emails, phones, names via title/patronymic/cue, PDF author metadata.",
+      "evidenced risks":"Risks the model flagged that cite verified facts as evidence — an uncited risk is discarded, never shown.",
+    };
     const cells=[
       [s.facts_extracted,"facts extracted",""],
       [s.checks_passed,"checks verified",""],
@@ -332,7 +342,7 @@ const RENDERERS={
       [(r.risks||[]).length,"evidenced risks",(r.risks||[]).length?"bad":"dim"],
     ];
     return `<div class="stat-row t12" style="grid-column:span 12">`+cells.map(([n,l,c])=>
-      `<div class="stat-tile"><div class="n ${c}">${n}</div><div class="l">${l}</div></div>`).join("")+`</div>`;
+      `<div class="stat-tile"><span class="info" title="${esc(kpi_info[l]||"")}">i</span><div class="n ${c}">${n}</div><div class="l">${l}</div></div>`).join("")+`</div>`;
   }},
   check_chart:{gate:r=>Array.isArray(r.checks)&&r.checks.some(c=>c.expected!=null&&c.actual!=null),render:r=>{
     const rows=r.checks.filter(c=>c.expected!=null&&c.actual!=null);
