@@ -227,7 +227,8 @@ check("missing quote key fails",
 
 print("\n=== 12. DEMO_FALLBACK path ===")
 if os.path.exists("sample_report.pdf"):
-    old_key = os.environ.pop("GEMINI_API_KEY", None)
+    old_keys = {k: os.environ.pop(k, None)
+                for k in ("DEEPSEEK_API_KEY", "deepseek_api", "GEMINI_API_KEY")}
     old_fallback = os.environ.get("DEMO_FALLBACK")
     os.environ["DEMO_FALLBACK"] = "1"
     try:
@@ -248,8 +249,9 @@ if os.path.exists("sample_report.pdf"):
               all(f.get("verified_in_source") for f in out.get("facts") or []),
               f"flags: {[f.get('verified_in_source') for f in out.get('facts') or []]}")
     finally:
-        if old_key is not None:
-            os.environ["GEMINI_API_KEY"] = old_key
+        for k, v in old_keys.items():
+            if v is not None:
+                os.environ[k] = v
         if old_fallback is not None:
             os.environ["DEMO_FALLBACK"] = old_fallback
         else:
@@ -306,7 +308,8 @@ with open(os.path.join(os.path.dirname(__file__), "fixtures",
 check("fixture carries a recommendation",
       bool(str(_fx.get("recommendation", "")).strip()))
 if os.path.exists("sample_report.pdf"):
-    _ok = os.environ.pop("GEMINI_API_KEY", None)
+    _oks = {k: os.environ.pop(k, None)
+            for k in ("DEEPSEEK_API_KEY", "deepseek_api", "GEMINI_API_KEY")}
     os.environ["DEMO_FALLBACK"] = "1"
     try:
         _out = backend.analyze("sample_report.pdf", "Does revenue add up?")
@@ -314,9 +317,33 @@ if os.path.exists("sample_report.pdf"):
               bool(str(_out.get("recommendation", "")).strip()),
               f"got: {_out.get('recommendation')!r}")
     finally:
-        if _ok is not None:
-            os.environ["GEMINI_API_KEY"] = _ok
+        for k, v in _oks.items():
+            if v is not None:
+                os.environ[k] = v
         os.environ.pop("DEMO_FALLBACK", None)
+
+
+# ── 16. DeepSeek provider swap — written BEFORE the implementation ─────────
+
+print("\n=== 16. DeepSeek provider ===")
+check("backend exposes _call_deepseek", hasattr(backend, "_call_deepseek"))
+check("gemini entrypoint is gone", not hasattr(backend, "_call_gemini"))
+check("default model is deepseek-chat", backend.MODEL == "deepseek-chat")
+_src = open(os.path.join(os.path.dirname(__file__), "backend.py")).read()
+check("no gemini references left in backend", "gemini" not in _src.lower())
+_saved = {k: os.environ.pop(k, None)
+          for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+os.environ.pop("DEMO_FALLBACK", None)
+try:
+    backend._call_deepseek([("Page 1", "x")], "q")
+    check("missing key raises", False, "should have raised")
+except Exception as e:
+    check("missing key raises", True)
+    check("error names DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY" in str(e), str(e))
+finally:
+    for k, v in _saved.items():
+        if v is not None:
+            os.environ[k] = v
 
 # ── Summary ───────────────────────────────────────────────────────────────
 
