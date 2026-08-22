@@ -35,3 +35,9 @@ the UI, and the exact transmitted text is inspectable under "What left
 this machine". Clear Session deletes the uploaded temp file from disk.
 Known limits (stated in-app): bare names without title/patronymic/cue,
 and PII inside scanned images.
+
+## Contributing & developer tips
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — setup in four numbered steps, the
+local NDJSON API contract, the six load-bearing rules (each backed by a
+test), and the sharp edges worth knowing before your first commit.
