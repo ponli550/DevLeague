@@ -951,6 +951,64 @@ check("gate failure degrades to a table, never a broken visual",
 check("unregistered type fails loudly", "Unregistered artifact type"
       in _html29)
 
+
+# ── 30. AI-chosen charts, verified data only — spec BEFORE code ────────────
+
+print("\n=== 30. AI-chosen charts ===")
+check("prompt invites any chart kind", '"charts"' in backend.SYSTEM_PROMPT
+      and "any kind" in backend.SYSTEM_PROMPT.lower())
+_facts30 = [{"id": "f1", "claim": "Product", "value": 100.0,
+             "verified_in_source": True},
+            {"id": "f2", "claim": "Services", "value": 50.0,
+             "verified_in_source": True},
+            {"id": "f3", "claim": "Unpinned", "value": 7.0,
+             "verified_in_source": False}]
+_charts30 = [
+    {"kind": "donut", "title": "Mix",
+     "points": [{"fact_id": "f1"}, {"fact_id": "f2"}]},
+    {"kind": "hologram", "title": "Exotic",
+     "points": [{"fact_id": "f1"}]},
+    {"kind": "bar", "title": "Phantom",
+     "points": [{"fact_id": "f99"}]},
+    {"kind": "bar", "title": "Unpinned",
+     "points": [{"fact_id": "f3"}]},
+    "not a dict",
+]
+_cc = backend._clean_charts(_charts30, _facts30)
+check("resolved charts keep values from verified facts",
+      any(c["title"] == "Mix" and c["points"][0]["value"] == 100.0
+          and c["points"][0]["label"] == "Product" for c in _cc))
+check("exotic kinds pass through (the UI gate decides rendering)",
+      any(c["kind"] == "hologram" for c in _cc))
+check("phantom fact refs are discarded",
+      not any(c["title"] == "Phantom" for c in _cc))
+check("unpinned facts never chart",
+      not any(c["title"] == "Unpinned" for c in _cc))
+with open(os.path.join(os.path.dirname(__file__), "fixtures",
+                       "cached_response.json")) as fh:
+    _fx30 = json.load(fh)
+check("fixture carries a chart", bool(_fx30.get("charts")))
+_ks30 = {k: os.environ.pop(k, None) for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+os.environ["DEMO_FALLBACK"] = "1"
+try:
+    _o30 = backend.analyze("sample_report.pdf", "Visualize the revenue mix")
+    check("analyze surfaces charts with resolved points",
+          _o30.get("charts") and all(
+              "value" in p for c in _o30["charts"] for p in c["points"]))
+finally:
+    os.environ.pop("DEMO_FALLBACK", None)
+    for k, v in _ks30.items():
+        if v is not None:
+            os.environ[k] = v
+_html30 = open(os.path.join(os.path.dirname(__file__), "web",
+                            "index.html")).read()
+check("web has a deterministic chart-kind registry",
+      "const CHART_KINDS" in _html30)
+check("charts render as inline SVG, no library",
+      "<svg" in _html30 and "chart.js" not in _html30.lower())
+check("unknown kinds degrade through the fallback, stated plainly",
+      "not in the deterministic chart registry" in _html30)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")

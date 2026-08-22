@@ -147,3 +147,11 @@ Do this on the actual projector or an external display beforehand:
 - [ ] `DEMO_FALLBACK` toggled `1` then back to `0`, CACHED banner seen — `___`
 - [ ] Non-sample PDF uploaded live, clean result or graceful failure — `___`
 - [ ] Dark UI reviewed on a projector/external display — `___`
+
+## Public demo URL (optional, cloudflared)
+
+`bash scripts/tunnel.sh` serves the app on an ephemeral trycloudflare
+URL. While it runs, uploads are publicly reachable (unguessable URL, no
+auth) — PDPA answer if asked: processing still happens on this machine;
+the tunnel only fronts it. Start it for the demo window, Ctrl-C it the
+moment the demo ends, and never leave it running unattended.
