@@ -209,6 +209,13 @@ CUSTOM_CSS = """
     font-size: 12px; margin-top: 6px; opacity: 0.8;
     font-family: ui-monospace, Menlo, monospace;
 }
+/* The anti-cheat trust story: shown when the model's own number was
+   discarded in favour of a cited figure. */
+.override-note {
+    margin-top: 8px; padding: 8px 10px; border-radius: 6px;
+    background: rgba(79, 70, 229, 0.12); font-size: 12.5px;
+}
+.override-note, .override-note * { color: #312E81 !important; }
 
 /* Pattern cards — teal for confirmed, grey for unverifiable. */
 .pattern-card {
@@ -222,6 +229,12 @@ CUSTOM_CSS = """
     background: #F1F5F9 !important; border-left-color: #94A3B8;
 }
 .pattern-unver, .pattern-unver * { color: #334155 !important; }
+/* Confirmed sign/threshold flags are ADVERSE findings — amber warning,
+   never the reassuring teal of a neutral relationship. */
+.pattern-flag {
+    background: #FEF3C7 !important; border-left-color: #D97706;
+}
+.pattern-flag, .pattern-flag * { color: #78350F !important; }
 """
 
 # ── Renderers ──────────────────────────────────────────────────────────────
@@ -254,7 +267,7 @@ def render_summary(result: dict) -> str:
 
 def render_checks(result: dict) -> str:
     checks = result.get("checks") or []
-    html = render_risks(result)
+    html = ""
 
     rec = (result.get("recommendation") or "").strip()
     if rec:
@@ -276,8 +289,9 @@ def render_checks(result: dict) -> str:
             html += (f'<div class="verified-card">'
                      f'<strong>✅ Verified:</strong> '
                      f'{c.get("description","")}<br>'
-                     f'AI stated: <code>{_fmt(c.get("expected"))}</code> · '
+                     f'Document: <code>{_fmt(c.get("expected"))}</code> · '
                      f'Computed: <code>{_fmt(c.get("actual"))}</code>'
+                     f'{_override_note(c)}'
                      f'</div>')
         else:
             diff = None
@@ -286,12 +300,28 @@ def render_checks(result: dict) -> str:
             html += (f'<div class="mismatch-card">'
                      f'<strong>❌ MISMATCH:</strong> '
                      f'{c.get("description","")}<br>'
-                     f'AI stated: <code>{_fmt(c.get("expected"))}</code> · '
+                     f'Document: <code>{_fmt(c.get("expected"))}</code> · '
                      f'Computed: <code>{_fmt(c.get("actual"))}</code> · '
                      f'Off by: <code>{_fmt(diff)}</code>'
+                     f'{_override_note(c)}'
                      f'</div>')
 
     return html
+
+
+def _override_note(c: dict) -> str:
+    """The trust-story line: when the anti-cheat discarded the model's
+    self-typed number in favour of a cited figure, show it. This is what
+    makes 'we never trust the model' visible rather than merely claimed."""
+    # Only render when there is a concrete cited figure to contrast the
+    # model's number against — composition/ratio clear "expected" to None,
+    # so an override there would otherwise read "cited figure n/a".
+    if not c.get("overridden") or c.get("expected") is None:
+        return ""
+    return ('<div class="override-note">🛡️ The model claimed '
+            f'<code>{_fmt(c.get("model_stated"))}</code>; we ignored that '
+            f'and verified against the document\'s cited figure '
+            f'<code>{_fmt(c.get("expected"))}</code> instead.</div>')
 
 
 def render_insights(result: dict) -> str:
@@ -362,13 +392,20 @@ def render_patterns(result: dict) -> str:
         elif p.get("passed"):
             act = p.get("actual")
             if kind in ("composition", "ratio"):
+                # A neutral, informational relationship — teal is fine.
                 figure = f'<code>{_fmt(act)}%</code>'
+                out += (f'<div class="pattern-card pattern-ok">'
+                        f'<strong>📈 {tag} confirmed:</strong> {desc}<br>'
+                        f'Computed in Python: {figure}'
+                        f'<div class="risk-cite">Evidence: {cite}</div></div>')
             else:
+                # sign/threshold: a confirmed flag is an ADVERSE finding,
+                # so render it as a warning, never reassuring green.
                 figure = f'<code>{_fmt(act)}</code>'
-            out += (f'<div class="pattern-card pattern-ok">'
-                    f'<strong>📈 {tag} confirmed:</strong> {desc}<br>'
-                    f'Computed in Python: {figure}'
-                    f'<div class="risk-cite">Evidence: {cite}</div></div>')
+                out += (f'<div class="pattern-card pattern-flag">'
+                        f'<strong>🚩 {tag} flag:</strong> {desc}<br>'
+                        f'Value confirmed in Python: {figure}'
+                        f'<div class="risk-cite">Evidence: {cite}</div></div>')
     return out
 
 

@@ -520,108 +520,11 @@ if os.path.exists("sample_report.pdf"):
         os.environ.pop("DEMO_FALLBACK", None)
 
 
-# ── 22. bounded retry before fallback (#34) — written BEFORE the code ──────
-
-print("\n=== 22. bounded retry ===")
-import inspect as _insp
-_calls = {"n": 0}
-_orig = backend._call_deepseek
-def _flaky(pages, q):
-    _calls["n"] += 1
-    if _calls["n"] == 1:
-        raise RuntimeError("transient network blip")
-    return {"answer": "x"}
-backend._call_deepseek = _flaky
-try:
-    _out, _cached = backend.ask_llm([("Page 1", "t")], "q")
-    check("one transient failure is retried and succeeds",
-          _out == {"answer": "x"} and _cached is False and _calls["n"] == 2,
-          f"calls={_calls['n']}")
-    _calls["n"] = 0
-    def _dead(pages, q):
-        _calls["n"] += 1
-        raise RuntimeError("hard down")
-    backend._call_deepseek = _dead
-    _oldfb = os.environ.pop("DEMO_FALLBACK", None)
-    try:
-        try:
-            backend.ask_llm([("Page 1", "t")], "q")
-            check("double failure raises", False)
-        except RuntimeError as e:
-            check("double failure raises after exactly 2 attempts",
-                  _calls["n"] == 2, f"calls={_calls['n']}")
-            check("error names the retry", "retry" in str(e).lower(), str(e))
-        _calls["n"] = 0
-        os.environ["DEMO_FALLBACK"] = "1"
-        _out, _cached = backend.ask_llm([("Page 1", "t")], "q")
-        check("fallback engages only after the retry",
-              _cached is True and _calls["n"] == 2, f"calls={_calls['n']}")
-    finally:
-        os.environ.pop("DEMO_FALLBACK", None)
-        if _oldfb is not None:
-            os.environ["DEMO_FALLBACK"] = _oldfb
-finally:
-    backend._call_deepseek = _orig
-check("client call carries an explicit timeout",
-      "timeout" in _insp.getsource(backend._call_deepseek))
-
-
-# ── 23. golden XLSX fixture (#33) — written BEFORE the code ────────────────
-
-print("\n=== 23. golden XLSX ===")
-import hashlib as _hl
-check("make_sample exposes an xlsx generator",
-      hasattr(__import__("make_sample"), "build_xlsx"))
-if hasattr(__import__("make_sample"), "build_xlsx"):
-    import make_sample as _ms
-    _xp = os.path.join(tempfile.gettempdir(), "_golden_check.xlsx")
-    _ms.build_xlsx(_xp)
-    _sheets = backend.parse_xlsx(_xp)
-    _text = "\n".join(t for _, t in _sheets)
-    _sha = _hl.sha256(_text.encode()).hexdigest()
-    with open(os.path.join(os.path.dirname(__file__), "fixtures",
-                           "golden_xlsx.json")) as fh:
-        _g = json.load(fh)
-    check("parsed text matches the golden sha", _sha == _g["text_sha256"],
-          f"got {_sha[:16]}")
-    _clean, _n = backend.redact(_text)
-    check("golden redaction count matches", _n == _g["redaction_count"],
-          f"got {_n}")
-    check("xlsx carries the same planted discrepancy",
-          "2,750,000" in _text or "2750000" in _text)
-    os.remove(_xp)
-
-
-# ── 24. Gradio app risks parity (#32) — written BEFORE the code ────────────
-
-print("\n=== 24. Gradio risks parity ===")
-try:
-    import app as _app
-    check("app.py imports (CI now guards the Gradio UI)", True)
-except Exception as _e:
-    check("app.py imports (CI now guards the Gradio UI)", False, str(_e))
-    _app = None
-if _app is not None:
-    check("app exposes render_risks", hasattr(_app, "render_risks"))
-    if hasattr(_app, "render_risks"):
-        _html = _app.render_risks({"risks": [
-            {"description": "Total does not reconcile", "severity": "high",
-             "evidence_fact_ids": ["f1", "f4"]}]})
-        check("risk description and evidence rendered",
-              "Total does not reconcile" in _html and "f1" in _html)
-        check("severity is visible as text, not color alone",
-              "high" in _html.lower())
-        check("no risks -> empty string, no placeholder card",
-              _app.render_risks({"risks": []}) == "")
-    check("FAKE payload carries risks for UI development",
-          bool(_app.FAKE.get("risks")))
-
-
-# ── 25. Verified insights summary (Lab 1: "concise summaries") ─────────────
+# ── 22. Verified insights summary (Lab 1: "concise summaries") ─────────────
 # The insights summary must be COMPOSED from verified data, never carry a
 # number the pipeline did not re-check. Written to lock that guarantee.
 
-print("\n=== 25. Verified insights summary ===")
+print("\n=== 22. Verified insights summary ===")
 
 # The _empty_result() bug: an error/empty result must carry NO risks and an
 # empty insights string — never a placeholder.
@@ -716,12 +619,12 @@ if os.path.exists("sample_report.pdf"):
         os.environ.pop("DEMO_FALLBACK", None)
 
 
-# ── 26. Pattern analysis (Lab 1: "patterns") — after verify+citations ──────
+# ── 23. Pattern analysis (Lab 1: "patterns") — after verify+citations ──────
 # Patterns are proposed by the model but RECOMPUTED in Python from cited
 # facts, dropped if uncited, and their prose is digit-masked. Written to
 # lock all of that.
 
-print("\n=== 26. Pattern analysis ===")
+print("\n=== 23. Pattern analysis ===")
 check("prompt demands structured patterns", '"patterns"' in backend.SYSTEM_PROMPT)
 check("prompt names the three pattern kinds",
       "composition" in backend.SYSTEM_PROMPT and "ratio" in backend.SYSTEM_PROMPT
@@ -815,6 +718,224 @@ if os.path.exists("sample_report.pdf"):
                 os.environ[k] = v
         os.environ.pop("DEMO_FALLBACK", None)
 
+
+# ── 24. Improvement batch: negatives, fences, anti-cheat visibility, ───────
+#     suppressed counts, opex ratio, flag wording, UTF-8. Written to lock
+#     the senior-approved improvements A/C/B/H/I/F.
+
+print("\n=== 24. Improvement batch ===")
+
+# A — accounting-parentheses negatives.
+check("bracketed number is negative", backend._to_number("(50,000)") == -50000.0)
+check("bracketed decimal is negative",
+      abs(backend._to_number("(1,234.50)") - (-1234.5)) < 0.001)
+check("plain number stays positive", backend._to_number("1,200,000") == 1200000.0)
+check("currency-prefixed stays positive", backend._to_number("RM 2,750,000") == 2750000.0)
+check("a bracketed negative flips a difference",
+      backend.verify(
+          [{"id": "f1", "value": 100000}, {"id": "f2", "value": "(30,000)"}],
+          [{"description": "d", "operation": "sum",
+            "operand_fact_ids": ["f1", "f2"], "expected_value": 70000}]
+      )[0]["actual"] == 70000.0)
+
+# C — case-insensitive fence strip.
+check("uppercase JSON fence is stripped",
+      backend._extract_json('```JSON\n{"answer":"x"}\n```').get("answer") == "x")
+
+# H — anti-cheat visibility. The model's typed number is preserved for
+# display, the override is flagged, but expected/passed are UNCHANGED.
+_hf = [{"id": "f1", "value": 1200000}, {"id": "f2", "value": 1150000},
+       {"id": "f3", "value": 300000}, {"id": "f4", "value": 2750000}]
+_hc = [{"description": "components vs stated", "operation": "sum",
+        "operand_fact_ids": ["f1", "f2", "f3"], "against_fact_id": "f4",
+        "expected_value": 2650000}]  # model's self-serving number
+_hr = backend.verify(_hf, _hc)[0]
+check("model_stated preserves the model's typed number",
+      _hr["model_stated"] == 2650000.0)
+check("overridden flags the anti-cheat substitution", _hr["overridden"] is True)
+check("expected still comes from the cited fact (invariant)",
+      _hr["expected"] == 2750000.0)
+check("passed logic unchanged by the display field", _hr["passed"] is False)
+# No override flag when the model's number agrees with the cited fact.
+_hr2 = backend.verify(
+    [{"id": "f1", "value": 100}, {"id": "f2", "value": 200}, {"id": "f3", "value": 300}],
+    [{"description": "d", "operation": "sum", "operand_fact_ids": ["f1", "f2"],
+      "against_fact_id": "f3", "expected_value": 300}])[0]
+check("no override when model agrees with the cited figure",
+      _hr2["overridden"] is False)
+
+# I — suppressed-claim counts surface in the stage detail, not the summary.
+check("summary dict has no suppressed keys (invariant)",
+      set(backend._empty_result()["summary"].keys())
+      == {"facts_extracted", "checks_run", "checks_passed", "checks_failed"})
+
+# F — the fixture now exercises an opex-to-revenue ratio pattern.
+with open(os.path.join(os.path.dirname(__file__), "fixtures",
+                       "cached_response.json"), encoding="utf-8") as fh:
+    _fx4 = json.load(fh)
+check("prompt demands opex-to-revenue ratio",
+      "opex-to-revenue" in backend.SYSTEM_PROMPT.lower()
+      or "opex" in backend.SYSTEM_PROMPT.lower())
+check("fixture carries a ratio pattern",
+      any(p.get("kind") == "ratio" for p in _fx4.get("patterns", [])))
+
+# B — a confirmed sign/threshold pattern reads as a FLAG, not a reassuring
+# "verified". (Presentation wording; verify() passed logic is unchanged.)
+_flag = backend.build_insights(
+    [{"id": "f1", "value": -50000}], [], [],
+    {"facts_extracted": 1, "checks_run": 0},
+    [{"kind": "sign", "description": "net loss", "actual": -50000.0,
+      "passed": True, "error": None, "evidence_fact_ids": ["f1"]}])
+check("sign pattern insight is framed as a flag", "Flag confirmed" in _flag)
+check("sign pattern insight is not reassuring 'verified'",
+      "Pattern verified" not in _flag)
+
+# UTF-8 regression: the fixture loads without mojibake (the em-dash bug).
+_rec = str(_fx4.get("recommendation", ""))
+check("fixture recommendation loads without mojibake",
+      "â€" not in _rec and "—" in _fx4.get("answer", ""))
+
+
+# ── 25. bounded retry before fallback (#34) — written BEFORE the code ──────
+
+print("\n=== 25. bounded retry ===")
+import inspect as _insp
+_calls = {"n": 0}
+_orig = backend._call_deepseek
+def _flaky(pages, q):
+    _calls["n"] += 1
+    if _calls["n"] == 1:
+        raise RuntimeError("transient network blip")
+    return {"answer": "x"}
+backend._call_deepseek = _flaky
+try:
+    _out, _cached = backend.ask_llm([("Page 1", "t")], "q")
+    check("one transient failure is retried and succeeds",
+          _out == {"answer": "x"} and _cached is False and _calls["n"] == 2,
+          f"calls={_calls['n']}")
+    _calls["n"] = 0
+    def _dead(pages, q):
+        _calls["n"] += 1
+        raise RuntimeError("hard down")
+    backend._call_deepseek = _dead
+    _oldfb = os.environ.pop("DEMO_FALLBACK", None)
+    try:
+        try:
+            backend.ask_llm([("Page 1", "t")], "q")
+            check("double failure raises", False)
+        except RuntimeError as e:
+            check("double failure raises after exactly 2 attempts",
+                  _calls["n"] == 2, f"calls={_calls['n']}")
+            check("error names the retry", "retry" in str(e).lower(), str(e))
+        _calls["n"] = 0
+        os.environ["DEMO_FALLBACK"] = "1"
+        _out, _cached = backend.ask_llm([("Page 1", "t")], "q")
+        check("fallback engages only after the retry",
+              _cached is True and _calls["n"] == 2, f"calls={_calls['n']}")
+    finally:
+        os.environ.pop("DEMO_FALLBACK", None)
+        if _oldfb is not None:
+            os.environ["DEMO_FALLBACK"] = _oldfb
+finally:
+    backend._call_deepseek = _orig
+check("client call carries an explicit timeout",
+      "timeout" in _insp.getsource(backend._call_deepseek))
+
+
+# ── 26. golden XLSX fixture (#33) — written BEFORE the code ────────────────
+
+print("\n=== 26. golden XLSX ===")
+import hashlib as _hl
+check("make_sample exposes an xlsx generator",
+      hasattr(__import__("make_sample"), "build_xlsx"))
+if hasattr(__import__("make_sample"), "build_xlsx"):
+    import make_sample as _ms
+    _xp = os.path.join(tempfile.gettempdir(), "_golden_check.xlsx")
+    _ms.build_xlsx(_xp)
+    _sheets = backend.parse_xlsx(_xp)
+    _text = "\n".join(t for _, t in _sheets)
+    _sha = _hl.sha256(_text.encode()).hexdigest()
+    with open(os.path.join(os.path.dirname(__file__), "fixtures",
+                           "golden_xlsx.json")) as fh:
+        _g = json.load(fh)
+    check("parsed text matches the golden sha", _sha == _g["text_sha256"],
+          f"got {_sha[:16]}")
+    _clean, _n = backend.redact(_text)
+    check("golden redaction count matches", _n == _g["redaction_count"],
+          f"got {_n}")
+    check("xlsx carries the same planted discrepancy",
+          "2,750,000" in _text or "2750000" in _text)
+    os.remove(_xp)
+
+
+# ── 27. Gradio app risks parity (#32) — written BEFORE the code ────────────
+
+print("\n=== 27. Gradio risks parity ===")
+try:
+    import app as _app
+    check("app.py imports (CI now guards the Gradio UI)", True)
+except Exception as _e:
+    check("app.py imports (CI now guards the Gradio UI)", False, str(_e))
+    _app = None
+if _app is not None:
+    check("app exposes render_risks", hasattr(_app, "render_risks"))
+    if hasattr(_app, "render_risks"):
+        _html = _app.render_risks({"risks": [
+            {"description": "Total does not reconcile", "severity": "high",
+             "evidence_fact_ids": ["f1", "f4"]}]})
+        check("risk description and evidence rendered",
+              "Total does not reconcile" in _html and "f1" in _html)
+        check("severity is visible as text, not color alone",
+              "high" in _html.lower())
+        # In the current layout risks have their own panel, so an empty
+        # risk set renders a positive "no risks flagged" confirmation
+        # rather than nothing — it must not render a phantom risk card.
+        _empty_html = _app.render_risks({"risks": []})
+        check("no risks -> no phantom risk card",
+              "risk-card" not in _empty_html and "RISK" not in _empty_html.upper())
+    check("FAKE payload carries risks for UI development",
+          bool(_app.FAKE.get("risks")))
+
+
+# ── 28. tamper-evident audit chain — spec BEFORE code ──────────────────────
+
+print("\n=== 28. audit chain ===")
+import hashlib as _ah, hmac as _am
+_ks = {k: os.environ.pop(k, None) for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+os.environ["DEMO_FALLBACK"] = "1"
+os.environ["AUDIT_HMAC_KEY"] = "test-audit-key"
+try:
+    _evs = list(backend.analyze_stream("sample_report.pdf", "Does it add up?"))
+    check("every event carries prev_hash, row_hash, sig",
+          all(e.get("row_hash") and e.get("sig") and "prev_hash" in e
+              for e in _evs))
+    check("chain verifies end to end", backend.verify_audit_chain(_evs) is True)
+    check("sig is HMAC(key, row_hash)",
+          _evs[0]["sig"] == _am.new(b"test-audit-key",
+                                    _evs[0]["row_hash"].encode(),
+                                    _ah.sha256).hexdigest())
+    import copy as _cp
+    _t = _cp.deepcopy(_evs)
+    _t[2]["detail"] = "44 PII item(s) masked"       # rewrite history
+    check("mutating any historical event breaks verification",
+          backend.verify_audit_chain(_t) is False)
+    _t2 = _cp.deepcopy(_evs)
+    _t2[1], _t2[2] = _t2[2], _t2[1]                  # reorder
+    check("reordering events breaks verification",
+          backend.verify_audit_chain(_t2) is False)
+    _rel = _evs[-1]
+    check("release exposes the chain root",
+          _rel["stage"] == "release"
+          and _rel["result"]["audit_log_root"] == _rel["row_hash"])
+    check("no compliance string-labels introduced",
+          "compliance" not in open(os.path.join(
+              os.path.dirname(__file__), "backend.py")).read().lower())
+finally:
+    os.environ.pop("DEMO_FALLBACK", None)
+    os.environ.pop("AUDIT_HMAC_KEY", None)
+    for k, v in _ks.items():
+        if v is not None:
+            os.environ[k] = v
 
 # ── Summary ───────────────────────────────────────────────────────────────
 
