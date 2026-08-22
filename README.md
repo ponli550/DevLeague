@@ -15,6 +15,11 @@ uv run python server.py        # primary UI (FastAPI, http://127.0.0.1:7861)
 uv run python app.py           # alternative Gradio UI
 ```
 
+## Screenshots
+
+![Verified pipeline run](docs/screenshots/verified_run.png)
+*A live run: the planted RM 100k mismatch caught, the trend verified at 10.0%, an evidenced risk, and every number pinned to a verbatim source quote.*
+
 ## Pipeline
 
 upload → parse (pdfplumber/openpyxl) → PII redaction (local, before any
