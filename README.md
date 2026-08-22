@@ -8,16 +8,17 @@ calculation re-checked deterministically in Python — no `eval`, ever.
 
 ```bash
 uv sync
-cp .env.example .env        # put your GEMINI_API_KEY in .env
+cp .env.example .env        # put your DEEPSEEK_API_KEY in .env
 uv run python make_sample.py   # generates sample_report.pdf
 uv run python test_backend.py  # 69 local tests, zero API cost
-uv run python app.py           # launches the Gradio UI
+uv run python server.py        # primary UI (FastAPI, http://127.0.0.1:7861)
+uv run python app.py           # alternative Gradio UI
 ```
 
 ## Pipeline
 
 upload → parse (pdfplumber/openpyxl) → PII redaction (local, before any
-text reaches the model) → Gemini strict-JSON extraction → deterministic
+text reaches the model) → DeepSeek strict-JSON extraction → deterministic
 verification (sum/difference/percent_change) → verbatim-quote citation
 check → UI.
 
@@ -34,3 +35,9 @@ the UI, and the exact transmitted text is inspectable under "What left
 this machine". Clear Session deletes the uploaded temp file from disk.
 Known limits (stated in-app): bare names without title/patronymic/cue,
 and PII inside scanned images.
+
+## Contributing & developer tips
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — setup in four numbered steps, the
+local NDJSON API contract, the six load-bearing rules (each backed by a
+test), and the sharp edges worth knowing before your first commit.

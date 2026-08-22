@@ -375,6 +375,101 @@ with open(os.path.join(os.path.dirname(__file__), "fixtures",
 check("fixture exercises against_fact_id",
       any(c.get("against_fact_id") for c in _fx2.get("checks", [])))
 
+
+# ── 18. analyze_stream — in-product CI pipeline, written BEFORE the code ───
+
+print("\n=== 18. analyze_stream (CI pipeline) ===")
+check("backend exposes analyze_stream", hasattr(backend, "analyze_stream"))
+if hasattr(backend, "analyze_stream") and os.path.exists("sample_report.pdf"):
+    _keys = {k: os.environ.pop(k, None)
+             for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+    os.environ["DEMO_FALLBACK"] = "1"
+    try:
+        events = list(backend.analyze_stream(
+            "sample_report.pdf", "Does revenue add up?"))
+        stages = [e["stage"] for e in events if e["status"] in ("ok", "fail")]
+        check("stages run in CI order",
+              stages == ["parse", "redact", "extract",
+                         "verify-math", "verify-citations", "release"],
+              f"got {stages}")
+        check("every completed stage is measured",
+              all(e.get("elapsed_ms") is not None and e["elapsed_ms"] >= 0
+                  for e in events if e["status"] in ("ok", "fail")))
+        check("gate: nothing before release carries the answer",
+              all(not e.get("result") for e in events[:-1]))
+        final = events[-1]
+        check("release carries the full result",
+              final["stage"] == "release" and isinstance(final.get("result"), dict)
+              and final["result"].get("error") is None
+              and bool(final["result"].get("answer")))
+        ref = backend.analyze("sample_report.pdf", "Does revenue add up?")
+        check("analyze() and stream release agree on shape",
+              set(ref.keys()) == set(final["result"].keys()))
+        # hard failure: pipeline stops, later stages skip, error still released
+        bad = list(backend.analyze_stream(None, "q"))
+        bstat = {e["stage"]: e["status"] for e in bad}
+        check("hard fail stops at parse", bstat.get("parse") == "fail")
+        check("later stages are skipped, not run",
+              bstat.get("extract") == "skip" and bstat.get("verify-math") == "skip")
+        check("failure is still released with an error",
+              bad[-1]["stage"] == "release"
+              and bad[-1]["result"].get("error") is not None)
+    finally:
+        for k, v in _keys.items():
+            if v is not None:
+                os.environ[k] = v
+        os.environ.pop("DEMO_FALLBACK", None)
+
+
+# ── 19. FastAPI frontend server — written BEFORE the implementation ────────
+
+print("\n=== 19. FastAPI server ===")
+try:
+    import server as _srv
+    _has_srv = True
+except Exception as _e:
+    _has_srv = False
+    print(f"  (server import failed: {_e})")
+check("server module importable", _has_srv)
+if _has_srv and os.path.exists("sample_report.pdf"):
+    from fastapi.testclient import TestClient
+    _client = TestClient(_srv.app)
+    _r = _client.get("/")
+    check("serves the frontend at /",
+          _r.status_code == 200 and "FINVERIFY" in _r.text.upper())
+    check("frontend is self-contained (no tailwind CDN)",
+          "cdn.tailwindcss.com" not in _r.text)
+    check("frontend carries no fabricated tx hashes",
+          "8xA9" not in _r.text and "SETTLED" not in _r.text)
+    _saved = {k: os.environ.pop(k, None)
+              for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+    os.environ["DEMO_FALLBACK"] = "1"
+    try:
+        with open("sample_report.pdf", "rb") as fh:
+            _r = _client.post(
+                "/api/analyze",
+                files={"file": ("sample_report.pdf", fh, "application/pdf")},
+                data={"question": "Does revenue add up?"},
+            )
+        check("analyze endpoint streams", _r.status_code == 200)
+        _lines = [json.loads(l) for l in _r.text.strip().splitlines()]
+        _stages = [e["stage"] for e in _lines if e["status"] in ("ok", "fail")]
+        check("NDJSON events in CI order",
+              _stages == ["parse", "redact", "extract",
+                          "verify-math", "verify-citations", "release"],
+              f"got {_stages}")
+        check("release event carries the answer",
+              _lines[-1]["stage"] == "release"
+              and bool(_lines[-1]["result"].get("answer")))
+        check("server deleted the upload after analysis",
+              not any(fname.startswith("finverify_")
+                      for fname in os.listdir(tempfile.gettempdir())))
+    finally:
+        for k, v in _saved.items():
+            if v is not None:
+                os.environ[k] = v
+        os.environ.pop("DEMO_FALLBACK", None)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")

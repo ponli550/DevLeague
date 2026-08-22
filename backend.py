@@ -450,9 +450,160 @@ def _clean_facts(facts) -> list[dict]:
     return out
 
 
-def analyze(file_path: str, question: str) -> dict:
-    """Full pipeline. Never raises — errors come back in the 'error' field."""
-    result = {
+PIPELINE_STAGES = ["parse", "redact", "extract",
+                   "verify-math", "verify-citations", "release"]
+
+
+def analyze_stream(file_path: str, question: str):
+    """In-product CI: the pipeline the user watches. Yields one event per
+    stage transition — {"stage", "status": running|ok|fail|skip,
+    "detail", "elapsed_ms", "result"} — and releases the result only in
+    the final event. Nothing upstream carries the answer: what the user
+    sees has, by construction, already passed verification. Failures are
+    released as failures, never hidden."""
+    import time as _time
+
+    result = _empty_result()
+    failed = False
+
+    def _stage(name):
+        return {"stage": name, "status": "running", "detail": "",
+                "elapsed_ms": None, "result": None}
+
+    # ── parse ──────────────────────────────────────────────────────────
+    ev = _stage("parse")
+    yield ev
+    t0 = _time.perf_counter()
+    pages = []
+    if not file_path:
+        result["error"] = "No file provided."
+    elif not question or not question.strip():
+        result["error"] = "Ask a question about the document."
+    else:
+        try:
+            pages = parse_file(file_path)
+            if not pages:
+                result["error"] = ("No text found. If this is a scanned "
+                                   "PDF, try a text-based one.")
+        except Exception as e:
+            result["error"] = f"Could not read that file: {e}"
+    ms = int((_time.perf_counter() - t0) * 1000)
+    if result["error"]:
+        failed = True
+        yield {"stage": "parse", "status": "fail", "detail": result["error"],
+               "elapsed_ms": ms, "result": None}
+    else:
+        yield {"stage": "parse", "status": "ok",
+               "detail": f"{len(pages)} page(s) of text",
+               "elapsed_ms": ms, "result": None}
+
+    # ── redact ─────────────────────────────────────────────────────────
+    redacted = []
+    if failed:
+        yield {"stage": "redact", "status": "skip", "detail": "",
+               "elapsed_ms": None, "result": None}
+    else:
+        ev = _stage("redact")
+        yield ev
+        t0 = _time.perf_counter()
+        extra_names = (pdf_metadata_names(file_path)
+                       if file_path.lower().endswith(".pdf") else [])
+        total = 0
+        for label, text in pages:
+            clean, n = redact(text, extra_names)
+            redacted.append((label, clean))
+            total += n
+        result["redaction_count"] = total
+        result["redacted_preview"] = "\n\n".join(
+            f"--- {label} ---\n{text}" for label, text in redacted
+        )[:2000]
+        ms = int((_time.perf_counter() - t0) * 1000)
+        yield {"stage": "redact", "status": "ok",
+               "detail": f"{total} PII item(s) masked before transmission",
+               "elapsed_ms": ms, "result": None}
+
+    # ── extract ────────────────────────────────────────────────────────
+    raw = None
+    if failed:
+        yield {"stage": "extract", "status": "skip", "detail": "",
+               "elapsed_ms": None, "result": None}
+    else:
+        ev = _stage("extract")
+        yield ev
+        t0 = _time.perf_counter()
+        try:
+            raw, cached = ask_llm(redacted, question.strip())
+            result["fallback_used"] = cached
+            if not isinstance(raw, dict):
+                result["error"] = "Model returned an unexpected shape."
+        except Exception as e:
+            result["error"] = str(e)
+        ms = int((_time.perf_counter() - t0) * 1000)
+        if result["error"]:
+            failed = True
+            yield {"stage": "extract", "status": "fail",
+                   "detail": result["error"], "elapsed_ms": ms, "result": None}
+        else:
+            src_label = "CACHED fixture" if result["fallback_used"] else "LIVE model call"
+            n_facts = len(raw.get("facts") or [])
+            yield {"stage": "extract", "status": "ok",
+                   "detail": f"{n_facts} fact(s) via {src_label}",
+                   "elapsed_ms": ms, "result": None}
+
+    # ── verify-math ────────────────────────────────────────────────────
+    if failed:
+        yield {"stage": "verify-math", "status": "skip", "detail": "",
+               "elapsed_ms": None, "result": None}
+    else:
+        ev = _stage("verify-math")
+        yield ev
+        t0 = _time.perf_counter()
+        result["answer"] = str(raw.get("answer", "")).strip()
+        result["recommendation"] = str(raw.get("recommendation", "")).strip()
+        result["facts"] = _clean_facts(raw.get("facts"))
+        result["checks"] = verify(result["facts"], raw.get("checks"))
+        checks = result["checks"]
+        result["summary"] = {
+            "facts_extracted": len(result["facts"]),
+            "checks_run": len(checks),
+            "checks_passed": sum(1 for c in checks if c.get("passed")),
+            "checks_failed": sum(
+                1 for c in checks if not c.get("passed") and not c.get("error")
+            ),
+        }
+        ms = int((_time.perf_counter() - t0) * 1000)
+        s = result["summary"]
+        yield {"stage": "verify-math", "status": "ok",
+               "detail": (f"{s['checks_run']} check(s): "
+                          f"{s['checks_passed']} pass, "
+                          f"{s['checks_failed']} mismatch"),
+               "elapsed_ms": ms, "result": None}
+
+    # ── verify-citations ───────────────────────────────────────────────
+    if failed:
+        yield {"stage": "verify-citations", "status": "skip", "detail": "",
+               "elapsed_ms": None, "result": None}
+    else:
+        ev = _stage("verify-citations")
+        yield ev
+        t0 = _time.perf_counter()
+        for f in result["facts"]:
+            f["verified_in_source"] = _fact_in_source(f, redacted)
+        hits = sum(1 for f in result["facts"] if f["verified_in_source"])
+        ms = int((_time.perf_counter() - t0) * 1000)
+        yield {"stage": "verify-citations", "status": "ok",
+               "detail": f"{hits}/{len(result['facts'])} quote(s) verbatim in source",
+               "elapsed_ms": ms, "result": None}
+
+    # ── release ────────────────────────────────────────────────────────
+    yield {"stage": "release",
+           "status": "fail" if failed else "ok",
+           "detail": "released with error" if failed else "verified output released",
+           "elapsed_ms": 0, "result": result}
+
+
+def _empty_result() -> dict:
+    return {
         "answer": "",
         "recommendation": "",
         "facts": [],
@@ -465,69 +616,12 @@ def analyze(file_path: str, question: str) -> dict:
         "error": None,
     }
 
-    if not file_path:
-        result["error"] = "No file provided."
-        return result
-    if not question or not question.strip():
-        result["error"] = "Ask a question about the document."
-        return result
 
-    # Parse
-    try:
-        pages = parse_file(file_path)
-    except Exception as e:
-        result["error"] = f"Could not read that file: {e}"
-        return result
-
-    if not pages:
-        result["error"] = (
-            "No text found. If this is a scanned PDF, try a text-based one."
-        )
-        return result
-
-    # Redact — document metadata names join the scrub list for this run
-    extra_names = (
-        pdf_metadata_names(file_path) if file_path.lower().endswith(".pdf") else []
-    )
-    redacted, total = [], 0
-    for label, text in pages:
-        clean, n = redact(text, extra_names)
-        redacted.append((label, clean))
-        total += n
-    result["redaction_count"] = total
-    result["redacted_preview"] = "\n\n".join(
-        f"--- {label} ---\n{text}" for label, text in redacted
-    )[:2000]
-
-    # LLM (with demo-safety fallback inside ask_llm)
-    try:
-        raw, cached = ask_llm(redacted, question.strip())
-    except Exception as e:
-        result["error"] = str(e)
-        return result
-    result["fallback_used"] = cached
-
-    if not isinstance(raw, dict):
-        result["error"] = "Model returned an unexpected shape."
-        return result
-
-    # Verify
-    result["answer"] = str(raw.get("answer", "")).strip()
-    result["recommendation"] = str(raw.get("recommendation", "")).strip()
-    result["facts"] = _clean_facts(raw.get("facts"))
-    for f in result["facts"]:
-        f["verified_in_source"] = _fact_in_source(f, redacted)
-    result["checks"] = verify(result["facts"], raw.get("checks"))
-
-    # Summary stats
-    checks = result["checks"]
-    result["summary"] = {
-        "facts_extracted": len(result["facts"]),
-        "checks_run": len(checks),
-        "checks_passed": sum(1 for c in checks if c.get("passed")),
-        "checks_failed": sum(
-            1 for c in checks if not c.get("passed") and not c.get("error")
-        ),
-    }
-
+def analyze(file_path: str, question: str) -> dict:
+    """Full pipeline. Never raises — errors come back in the 'error' field.
+    Thin consumer of analyze_stream(): one code path, two presentations."""
+    result = None
+    for event in analyze_stream(file_path, question):
+        if event["stage"] == "release":
+            result = event["result"]
     return result
