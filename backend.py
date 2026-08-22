@@ -180,6 +180,7 @@ object and nothing else.
 Schema:
 {
   "answer": "your natural-language answer to the user's question",
+  "recommendation": "one concrete, actionable next step for the reader, grounded ONLY in verified findings",
   "facts": [
     {"id": "f1", "claim": "short label", "value": 1200000,
      "page": "Page 1", "quote": "the exact line copied from the document"}
@@ -202,6 +203,9 @@ Rules:
   document states a total, ALWAYS add a check comparing it to the sum of
   its line items.
 - Never invent a quote. If a number is not in the document, say so.
+- "recommendation" must be a single sentence a finance team could act on
+  (e.g. reconcile a mismatched total before sign-off). If nothing needs
+  action, say the figures verified cleanly.
 """
 
 
@@ -425,6 +429,7 @@ def analyze(file_path: str, question: str) -> dict:
     """Full pipeline. Never raises — errors come back in the 'error' field."""
     result = {
         "answer": "",
+        "recommendation": "",
         "facts": [],
         "checks": [],
         "redaction_count": 0,
@@ -483,6 +488,7 @@ def analyze(file_path: str, question: str) -> dict:
 
     # Verify
     result["answer"] = str(raw.get("answer", "")).strip()
+    result["recommendation"] = str(raw.get("recommendation", "")).strip()
     result["facts"] = _clean_facts(raw.get("facts"))
     for f in result["facts"]:
         f["verified_in_source"] = _fact_in_source(f, redacted)

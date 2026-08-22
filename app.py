@@ -38,6 +38,8 @@ FAKE = {
                 "checks_passed": 0, "checks_failed": 1},
     "redaction_count": 4,
     "redacted_preview": "--- Page 1 ---\nPrepared by [NAME_REDACTED] ...",
+    "recommendation": ("Reconcile the RM 100,000 gap between stated total "
+                       "revenue and the sum of its segments before sign-off."),
     "fallback_used": False,
     "error": None,
 }
@@ -76,6 +78,11 @@ CUSTOM_CSS = """
 .stat-pass  { background: #DCFCE7; color: #166534; }
 .stat-fail  { background: #FEE2E2; color: #991B1B; }
 .stat-pii   { background: #FEF3C7; color: #92400E; }
+.rec-card {
+    background: #EFF6FF; border-left: 4px solid #2563EB;
+    padding: 14px 18px; border-radius: 8px; margin: 10px 0;
+    color: #111827;
+}
 .source-card {
     background: #F8FAFC; border: 1px solid #E2E8F0;
     border-radius: 8px; padding: 12px 16px; margin: 8px 0;
@@ -129,6 +136,11 @@ def render_summary(result: dict) -> str:
 def render_checks(result: dict) -> str:
     checks = result.get("checks") or []
     html = ""
+
+    rec = (result.get("recommendation") or "").strip()
+    if rec:
+        html += (f'<div class="rec-card"><strong>💡 Recommendation:</strong> '
+                 f'{rec}</div>')
 
     if not checks:
         html += ('<div class="warning-card">'
