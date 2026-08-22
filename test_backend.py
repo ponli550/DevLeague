@@ -937,6 +937,20 @@ finally:
         if v is not None:
             os.environ[k] = v
 
+
+# ── 29. renderer registry with gates — spec BEFORE code ────────────────────
+
+print("\n=== 29. renderer registry ===")
+_html29 = open(os.path.join(os.path.dirname(__file__), "web",
+                            "index.html")).read()
+check("a RENDERERS registry object exists", "const RENDERERS" in _html29)
+check("every registered type declares a gate", "gate:" in _html29
+      and _html29.count("gate:") >= 4)
+check("gate failure degrades to a table, never a broken visual",
+      "renderFallbackTable" in _html29)
+check("unregistered type fails loudly", "Unregistered artifact type"
+      in _html29)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
