@@ -8,6 +8,11 @@ renders until it has passed a visible CI pipeline. 🧮 ≠ 🤖
 > LLMs are text engines. Ours is not allowed near a calculator —
 > it proposes, Python disposes. 😤
 
+## 15 seconds of it working 🎬
+
+![Live demo](docs/screenshots/demo.gif)
+*Real run, sped up: upload → CI pipeline → verified dashboard. Nothing staged.*
+
 ## The dashboard
 
 ![Verified pipeline run](docs/screenshots/verified_run.png)
