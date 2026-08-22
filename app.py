@@ -78,6 +78,18 @@ CUSTOM_CSS = """
 .stat-pass  { background: #DCFCE7; color: #166534; }
 .stat-fail  { background: #FEE2E2; color: #991B1B; }
 .stat-pii   { background: #FEF3C7; color: #92400E; }
+.pipe-panel {
+    background: #0F172A; border-radius: 8px; padding: 12px 16px;
+    margin-bottom: 12px; font-family: ui-monospace, Menlo, monospace;
+    font-size: 13px; color: #E2E8F0;
+}
+.pipe-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.pipe-ok   { color: #34D399; }
+.pipe-fail { color: #F87171; }
+.pipe-run  { color: #38BDF8; }
+.pipe-wait { color: #475569; }
+.pipe-skip { color: #64748B; text-decoration: line-through; }
+.pipe-ms   { margin-left: auto; color: #64748B; font-size: 11px; }
 .rec-card {
     background: #EFF6FF; border-left: 4px solid #2563EB;
     padding: 14px 18px; border-radius: 8px; margin: 10px 0;
@@ -207,36 +219,77 @@ def render_redacted(result: dict) -> str:
             'and scanned-image PII is invisible to text extraction.</p>')
 
 
+# ── Pipeline (in-product CI) ──────────────────────────────────────────────
+
+STAGE_LABELS = [
+    ("parse", "Parse document"),
+    ("redact", "Redact PII"),
+    ("extract", "Extract facts (model)"),
+    ("verify-math", "Verify arithmetic"),
+    ("verify-citations", "Verify citations"),
+    ("release", "Release to you"),
+]
+
+_ICON = {"ok": ("✓", "pipe-ok"), "fail": ("✗", "pipe-fail"),
+         "running": ("●", "pipe-run"), "skip": ("⊘", "pipe-skip"),
+         "pending": ("○", "pipe-wait")}
+
+
+def render_pipeline(states: dict) -> str:
+    rows = []
+    for key, label in STAGE_LABELS:
+        st = states.get(key, {"status": "pending", "detail": "", "elapsed_ms": None})
+        icon, cls = _ICON.get(st["status"], _ICON["pending"])
+        detail = f' — {st["detail"]}' if st.get("detail") else ""
+        ms = (f'<span class="pipe-ms">{st["elapsed_ms"]} ms</span>'
+              if st.get("elapsed_ms") is not None else "")
+        rows.append(f'<div class="pipe-row"><span class="{cls}">{icon}</span>'
+                    f'<span>{label}{detail}</span>{ms}</div>')
+    return '<div class="pipe-panel">' + "".join(rows) + "</div>"
+
+
 # ── Gradio handlers ───────────────────────────────────────────────────────
 
 def run(file_path, question):
+    """Generator: the user watches the CI pipeline run; the answer and
+    every card render only after the release stage — nothing reaches the
+    screen unverified."""
     if USE_FAKE:
-        result = FAKE
-    else:
-        import backend
-        result = backend.analyze(file_path, question)
+        states = {k: {"status": "ok", "detail": "", "elapsed_ms": 0}
+                  for k, _ in STAGE_LABELS}
+        yield ("", "", "", "", "", render_pipeline(states))
+        yield (FAKE["answer"], render_summary(FAKE), render_checks(FAKE),
+               render_facts(FAKE), render_redacted(FAKE),
+               render_pipeline(states))
+        return
+
+    import backend
+    states = {}
+    blank = ("", "", "", "", "")
+    yield (*blank, render_pipeline(states))
+    result = None
+    for ev in backend.analyze_stream(file_path, question):
+        states[ev["stage"]] = {"status": ev["status"],
+                               "detail": ev.get("detail", ""),
+                               "elapsed_ms": ev.get("elapsed_ms")}
+        if ev["stage"] == "release":
+            result = ev["result"]
+        yield (*blank, render_pipeline(states))
 
     # Errors route to an HTML slot — a Textbox would render the markup
     # as literal angle-bracket soup.
     if result.get("error"):
         error_html = f'<div class="warning-card">⚠️ {result["error"]}</div>'
-        return "", error_html, "", "", ""
+        yield ("", error_html, "", "", "", render_pipeline(states))
+        return
 
-    return (
+    yield (
         result.get("answer", ""),
         render_summary(result),
         render_checks(result),
         render_facts(result),
         render_redacted(result),
-    )
-
-
-def set_loading():
-    return (
-        "Analysing document...",
-        '<div class="stat-bar"><div class="stat-box stat-facts">⏳ Working...</div></div>',
-        "",
-        "",
+        render_pipeline(states),
     )
 
 
@@ -246,19 +299,12 @@ def clear(file_path):
     promise in the notice below true, not aspirational."""
     import backend
     backend.purge_upload(file_path)
-    return None, "", "", "", "", "", ""
+    return None, "", "", "", "", "", "", ""
 
 
 # ── App layout ─────────────────────────────────────────────────────────────
 
-with gr.Blocks(
-    title="FinVerify — AI Financial Report Verifier",
-    theme=gr.themes.Soft(
-        primary_hue="blue",
-        font=gr.themes.GoogleFont("Inter"),
-    ),
-    css=CUSTOM_CSS,
-) as demo:
+with gr.Blocks(title="FinVerify — AI Financial Report Verifier") as demo:
 
     gr.Markdown(
         "# 🔍 FinVerify\n"
@@ -293,6 +339,8 @@ with gr.Blocks(
 
         # ── Centre: answer + verification ─────────────────────────────
         with gr.Column(scale=2, min_width=400):
+            gr.Markdown("### 🛠 Verification pipeline")
+            pipeline_out = gr.HTML()
             answer_out = gr.Textbox(label="Analysis", lines=5, interactive=False)
             summary_out = gr.HTML()
             checks_out = gr.HTML()
@@ -304,18 +352,22 @@ with gr.Blocks(
 
     # Wire buttons
     go.click(
-        set_loading, None,
-        [answer_out, summary_out, checks_out, facts_out],
-    ).then(
         run, [file_in, question_in],
-        [answer_out, summary_out, checks_out, facts_out, redacted_out],
+        [answer_out, summary_out, checks_out, facts_out, redacted_out,
+         pipeline_out],
     )
     clear_btn.click(
         clear, [file_in],
         [file_in, question_in, answer_out, summary_out, checks_out,
-         facts_out, redacted_out],
+         facts_out, redacted_out, pipeline_out],
     )
 
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(
+        theme=gr.themes.Soft(
+            primary_hue="blue",
+            font=gr.themes.GoogleFont("Inter"),
+        ),
+        css=CUSTOM_CSS,
+    )
