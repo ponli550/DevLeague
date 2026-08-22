@@ -29,6 +29,13 @@ flowchart LR
     G --> H[📊 Dashboard<br/>shareable via URL fragment]
 ```
 
+## Live viewer 🌐
+
+Shared boards open anywhere: **https://finverify.nazrijz336.workers.dev** —
+static viewer on Cloudflare Workers; the engine (and your documents) never
+leave the machine that ran the analysis. Fragment links carry the board;
+this host stores nothing.
+
 ## Run
 
 ```bash

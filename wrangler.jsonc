@@ -1,0 +1,8 @@
+{
+  // FinVerify shared-board viewer: static assets only. The Python engine
+  // cannot run on Workers (native deps); this deployment renders boards
+  // shared via URL fragments — no data ever reaches this host.
+  "name": "finverify",
+  "compatibility_date": "2026-08-22",
+  "assets": { "directory": "./web" }
+}
