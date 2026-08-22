@@ -1073,6 +1073,17 @@ check("every KPI stat tile carries an (i) with an explanation",
       and all(k in _h34 for k in
               ("recomputed in Python", "before any text reached the model")))
 
+
+# ── 35. viewer-mode honesty on engine-less deployments — spec BEFORE code ──
+
+print("\n=== 35. viewer mode ===")
+_h35 = open(os.path.join(os.path.dirname(__file__), "web",
+                         "index.html")).read()
+check("engine presence probed, not assumed",
+      '"/api/analyze"' in _h35 and "405" in _h35 and "viewerMode" in _h35)
+check("viewer mode announces itself and disables execution",
+      "VIEWER MODE" in _h35 and "renders shared boards" in _h35)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
