@@ -39,7 +39,8 @@
         "f2",
         "f3"
       ],
-      "expected_value": 2750000
+      "expected_value": 2750000,
+      "against_fact_id": "f4"
     }
   ],
   "recommendation": "Reconcile the RM 100,000 gap between the stated total revenue (RM 2,750,000) and the sum of its segments (RM 2,650,000) before this report is signed off."

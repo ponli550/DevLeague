@@ -1,4 +1,4 @@
-"""FinVerify backend: parse -> redact -> LLM (Gemini, with demo-safety
+"""FinVerify backend: parse -> redact -> LLM (DeepSeek, with demo-safety
 fallback) -> verify (with anti-hallucination citation check).
 
 Member 1 owns this file. app.py calls exactly one function:
@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
 
 # ── Step 1: File parsing (PDF + XLSX) ─────────────────────────────────────
@@ -172,7 +172,7 @@ def redact(text: str, extra_names: list[str] | None = None) -> tuple[str, int]:
     return text, count
 
 
-# ── Step 3: LLM call (Gemini free tier, strict JSON, demo-safety fallback) ─
+# ── Step 3: LLM call (DeepSeek, strict JSON, demo-safety fallback) ─────────
 
 SYSTEM_PROMPT = """You analyse financial reports. Reply with a single JSON
 object and nothing else.
@@ -189,6 +189,7 @@ Schema:
     {"description": "what this verifies",
      "operation": "sum",
      "operand_fact_ids": ["f1", "f2"],
+     "against_fact_id": "f4",
      "expected_value": 2400000}
   ]
 }
@@ -202,6 +203,11 @@ Rules:
 - Whenever your answer relies on arithmetic, add a check for it. If the
   document states a total, ALWAYS add a check comparing it to the sum of
   its line items.
+- "against_fact_id" must reference the fact holding the figure the
+  DOCUMENT states (e.g. the stated total). Never set "expected_value"
+  to a number you computed yourself — the comparison target must be a
+  figure from the document, so a wrong stated total is caught rather
+  than reproduced.
 - Never invent a quote. If a number is not in the document, say so.
 - "recommendation" must be a single sentence a finance team could act on
   (e.g. reconcile a mismatched total before sign-off). If nothing needs
@@ -223,33 +229,38 @@ def _extract_json(raw: str) -> dict:
         raise
 
 
-def _call_gemini(pages: list[tuple[str, str]], question: str) -> dict:
-    """Raw call to Gemini. Raises on ANY failure: missing dependency,
-    missing API key, network error, or unparsable output. Deliberately
-    has no fallback logic of its own — ask_llm() owns that, so a missing
-    key is caught by the same safety net as a live network failure."""
+def _call_deepseek(pages: list[tuple[str, str]], question: str) -> dict:
+    """Raw call to DeepSeek (OpenAI-compatible API). Raises on ANY
+    failure: missing dependency, missing API key, network error, or
+    unparsable output. Deliberately has no fallback logic of its own —
+    ask_llm() owns that, so a missing key is caught by the same safety
+    net as a live network failure."""
     try:
-        from google import genai
+        from openai import OpenAI
     except ImportError:
-        raise RuntimeError(
-            "google-genai is not installed. Run: uv add google-genai"
-        )
+        raise RuntimeError("openai is not installed. Run: uv add openai")
 
-    api_key = os.environ.get("GEMINI_API_KEY")
+    # DEEPSEEK_API_KEY is canonical; `deepseek_api` accepted so an
+    # existing .env keeps working without edits.
+    api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("deepseek_api")
     if not api_key:
         raise RuntimeError(
-            "GEMINI_API_KEY is not set. Get a free key at "
-            "aistudio.google.com and put it in your .env file."
+            "DEEPSEEK_API_KEY is not set. Get a key at platform.deepseek.com "
+            "and put it in your .env file."
         )
 
-    client = genai.Client(api_key=api_key)
+    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
     doc = "\n\n".join(f"--- {label} ---\n{text}" for label, text in pages)
-    resp = client.models.generate_content(
+    resp = client.chat.completions.create(
         model=MODEL,
-        contents=f"{SYSTEM_PROMPT}\n\nDOCUMENT:\n{doc}\n\nQUESTION: {question}",
-        config={"response_mime_type": "application/json"},
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"DOCUMENT:\n{doc}\n\nQUESTION: {question}"},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.0,
     )
-    return _extract_json(resp.text)
+    return _extract_json(resp.choices[0].message.content)
 
 
 def _load_cached_response() -> dict:
@@ -260,14 +271,14 @@ def _load_cached_response() -> dict:
 
 
 def ask_llm(pages: list[tuple[str, str]], question: str) -> tuple[dict, bool]:
-    """Send redacted document to Gemini. Returns (parsed JSON dict, cached).
+    """Send redacted document to DeepSeek. Returns (parsed JSON dict, cached).
 
     `cached` is True only when the DEMO_FALLBACK substitution fired — the
     UI shows an amber banner in that case, so a replayed fixture can never
     silently impersonate a live extraction.
 
     If DEMO_FALLBACK=1 in the environment, ANY failure from
-    _call_gemini() — including a missing API key, not just a live
+    _call_deepseek() — including a missing API key, not just a live
     network error — is caught and a cached response is returned instead
     of raising. This is NOT general retry logic: it is a single, narrow
     substitution for one demo document, meant to be enabled only in the
@@ -276,7 +287,7 @@ def ask_llm(pages: list[tuple[str, str]], question: str) -> tuple[dict, bool]:
     failures.
     """
     try:
-        return _call_gemini(pages, question), False
+        return _call_deepseek(pages, question), False
     except Exception as e:
         if os.environ.get("DEMO_FALLBACK") == "1":
             return _load_cached_response(), True
@@ -318,6 +329,20 @@ def verify(facts: list, checks: list) -> list[dict]:
             "passed": False,
             "error": None,
         }
+
+        # A cited fact beats a free-typed expected_value: the model once
+        # set expected_value to its own computed sum, turning a real
+        # discrepancy into a PASS. A fact id points at a value that the
+        # citation check independently pins to the source text.
+        against = check.get("against_fact_id")
+        if against is not None:
+            target = by_id.get(str(against))
+            target_val = _to_number(target.get("value")) if isinstance(target, dict) else None
+            if target_val is None:
+                row["error"] = f"against_fact_id references unknown fact: {against}"
+                results.append(row)
+                continue
+            row["expected"] = target_val
 
         ids = check.get("operand_fact_ids") or []
         if not isinstance(ids, list) or not ids:
