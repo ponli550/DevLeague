@@ -902,6 +902,61 @@ if _app is not None:
     check("FAKE payload carries risks for UI development",
           bool(_app.FAKE.get("risks")))
 
+
+# ── 28. tamper-evident audit chain — spec BEFORE code ──────────────────────
+
+print("\n=== 28. audit chain ===")
+import hashlib as _ah, hmac as _am
+_ks = {k: os.environ.pop(k, None) for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+os.environ["DEMO_FALLBACK"] = "1"
+os.environ["AUDIT_HMAC_KEY"] = "test-audit-key"
+try:
+    _evs = list(backend.analyze_stream("sample_report.pdf", "Does it add up?"))
+    check("every event carries prev_hash, row_hash, sig",
+          all(e.get("row_hash") and e.get("sig") and "prev_hash" in e
+              for e in _evs))
+    check("chain verifies end to end", backend.verify_audit_chain(_evs) is True)
+    check("sig is HMAC(key, row_hash)",
+          _evs[0]["sig"] == _am.new(b"test-audit-key",
+                                    _evs[0]["row_hash"].encode(),
+                                    _ah.sha256).hexdigest())
+    import copy as _cp
+    _t = _cp.deepcopy(_evs)
+    _t[2]["detail"] = "44 PII item(s) masked"       # rewrite history
+    check("mutating any historical event breaks verification",
+          backend.verify_audit_chain(_t) is False)
+    _t2 = _cp.deepcopy(_evs)
+    _t2[1], _t2[2] = _t2[2], _t2[1]                  # reorder
+    check("reordering events breaks verification",
+          backend.verify_audit_chain(_t2) is False)
+    _rel = _evs[-1]
+    check("release exposes the chain root",
+          _rel["stage"] == "release"
+          and _rel["result"]["audit_log_root"] == _rel["row_hash"])
+    check("no compliance string-labels introduced",
+          "compliance" not in open(os.path.join(
+              os.path.dirname(__file__), "backend.py")).read().lower())
+finally:
+    os.environ.pop("DEMO_FALLBACK", None)
+    os.environ.pop("AUDIT_HMAC_KEY", None)
+    for k, v in _ks.items():
+        if v is not None:
+            os.environ[k] = v
+
+
+# ── 29. renderer registry with gates — spec BEFORE code ────────────────────
+
+print("\n=== 29. renderer registry ===")
+_html29 = open(os.path.join(os.path.dirname(__file__), "web",
+                            "index.html")).read()
+check("a RENDERERS registry object exists", "const RENDERERS" in _html29)
+check("every registered type declares a gate", "gate:" in _html29
+      and _html29.count("gate:") >= 4)
+check("gate failure degrades to a table, never a broken visual",
+      "renderFallbackTable" in _html29)
+check("unregistered type fails loudly", "Unregistered artifact type"
+      in _html29)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")

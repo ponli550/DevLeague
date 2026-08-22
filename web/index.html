@@ -198,16 +198,18 @@ $("exec").onclick=async()=>{
   $("exec").disabled=false;
   if(result)render(result);
 };
-function render(r){
-  if(r.error){$("canvas").innerHTML=`<div class="idle" style="border-color:var(--orange)"><div class="big" style="color:var(--orange)">PIPELINE HALTED</div><p>${esc(r.error)}</p></div>`;return;}
-  $("srcflag").textContent=r.fallback_used?"SOURCE: CACHED":"SOURCE: LIVE";
-  $("srcflag").style.color=r.fallback_used?"var(--amber)":"var(--teal)";
-  let h="";
-  if(r.fallback_used)h+=`<div class="banner">⚠ CACHED — the live model call failed; the demo fallback answered. Verification below still ran for real against these facts.</div>`;
-  h+=`<div class="answer"><span class="caps">Analysis</span><div class="body">${esc(r.answer)}</div>`;
-  if(r.recommendation)h+=`<div class="rec"><b>RECOMMENDATION »</b> ${esc(r.recommendation)}</div>`;
-  h+=`</div>`;
-  if(r.insights){
+// ── Renderer registry (cityos pattern): type -> (gate, render). A gate
+// checks SHAPE, not presence — malformed data degrades to a plain table
+// so a renderer can never lie with an empty or broken visual; an
+// unregistered type fails loudly instead of silently vanishing.
+function renderFallbackTable(type,data){
+  let rows="";
+  const items=Array.isArray(data)?data:[data];
+  items.slice(0,20).forEach(it=>{rows+=`<tr><td class="mono" style="padding:6px;border:1px solid var(--line);font-size:11px;word-break:break-all">${esc(JSON.stringify(it))}</td></tr>`;});
+  return `<div class="banner" style="border-color:var(--amber);color:var(--amber);background:rgba(245,158,11,.06)">⚠ ${esc(type)} failed its render gate — raw data shown instead of a broken visual</div><table style="width:100%;border-collapse:collapse;margin-bottom:16px">${rows}</table>`;
+}
+const RENDERERS={
+  insights:{gate:r=>r.insights==null||typeof r.insights==="string",render:r=>{let h="";if(r.insights){
     const items=r.insights.split("\n").map(s=>s.trim()).filter(Boolean);
     if(items.length){
       h+=`<div class="insights"><span class="caps">Verified insights — built only from re-checked figures</span><ul>`;
@@ -215,7 +217,8 @@ function render(r){
       h+=`</ul></div>`;
     }
   }
-  if(r.patterns&&r.patterns.length){
+  return h;}},
+  patterns:{gate:r=>r.patterns==null||Array.isArray(r.patterns),render:r=>{let h="";if(r.patterns&&r.patterns.length){
     h+=`<h2 class="caps section-gap">Patterns — spotted by the model, recomputed in Python</h2>`;
     const klabel={composition:"Composition",ratio:"Ratio",sign:"Threshold",threshold:"Threshold"};
     r.patterns.forEach(p=>{
@@ -239,7 +242,8 @@ function render(r){
       </div>`;
     });
   }
-  if(r.risks&&r.risks.length){
+  return h;}},
+  risks:{gate:r=>r.risks==null||Array.isArray(r.risks),render:r=>{let h="";if(r.risks&&r.risks.length){
     h+=`<h2 class="caps section-gap">Risks — every one cites its evidence</h2>`;
     r.risks.forEach(k=>{
       const col=k.severity==="high"?"var(--orange)":k.severity==="medium"?"var(--amber)":"var(--ink-faint)";
@@ -250,7 +254,8 @@ function render(r){
       </div>`;
     });
   }
-  h+=`<h2 class="caps section-gap">Verification flow — ${r.summary.checks_passed} pass / ${r.summary.checks_failed} mismatch · ${r.redaction_count} PII masked</h2>`;
+  return h;}},
+  checks:{gate:r=>Array.isArray(r.checks)&&r.summary&&typeof r.summary==="object",render:r=>{let h="";h+=`<h2 class="caps section-gap">Verification flow — ${r.summary.checks_passed} pass / ${r.summary.checks_failed} mismatch · ${r.redaction_count} PII masked</h2>`;
   h+=`<div class="flow">`;
   r.checks.forEach((c,i)=>{
     const cls=c.error?"warn":(c.passed?"ok":"bad");
@@ -270,7 +275,8 @@ function render(r){
     if(i<r.checks.length-1)h+=`<div class="arrow" style="animation-delay:${i*140+90}ms">→</div>`;
   });
   h+=`<div class="arrow" style="animation-delay:${r.checks.length*140}ms">→</div><div class="ghost" style="animation-delay:${r.checks.length*140+90}ms"><span style="font-size:28px;color:var(--line)">+</span><span class="caps" style="color:var(--ink-faint)">AWAITING NEXT PERIOD</span></div></div>`;
-  h+=`<div class="sources"><h2 class="caps">Sources — every number pinned to a verbatim quote</h2><div class="src-grid">`;
+  return h;}},
+  sources:{gate:r=>Array.isArray(r.facts),render:r=>{let h="";h+=`<div class="sources"><h2 class="caps">Sources — every number pinned to a verbatim quote</h2><div class="src-grid">`;
   r.facts.forEach((f,j)=>{
     h+=`<div class="src" style="animation-delay:${j*70}ms"><div class="top"><span class="claim">${esc(f.claim)}</span><span class="page">${esc(f.page)}</span></div>
       <div class="val">${fmt(f.value)}</div>
@@ -279,6 +285,29 @@ function render(r){
     </div>`;
   });
   h+=`</div></div>`;
+  return h;}},
+};
+const ARTIFACT_ORDER=["insights","patterns","risks","checks","sources"];
+function renderArtifact(type,r){
+  const reg=RENDERERS[type];
+  if(!reg)return `<div class="banner" style="border-color:var(--orange);color:var(--orange)">Unregistered artifact type: ${esc(type)}</div>`;
+  try{
+    if(!reg.gate(r))return renderFallbackTable(type,r[type==="sources"?"facts":type]);
+    return reg.render(r);
+  }catch(e){
+    return renderFallbackTable(type,r[type==="sources"?"facts":type]);
+  }
+}
+function render(r){
+  if(r.error){$("canvas").innerHTML=`<div class="idle" style="border-color:var(--orange)"><div class="big" style="color:var(--orange)">PIPELINE HALTED</div><p>${esc(r.error)}</p></div>`;return;}
+  $("srcflag").textContent=r.fallback_used?"SOURCE: CACHED":"SOURCE: LIVE";
+  $("srcflag").style.color=r.fallback_used?"var(--amber)":"var(--teal)";
+  let h="";
+  if(r.fallback_used)h+=`<div class="banner">⚠ CACHED — the live model call failed; the demo fallback answered. Verification below still ran for real against these facts.</div>`;
+  h+=`<div class="answer"><span class="caps">Analysis</span><div class="body">${esc(r.answer)}</div>`;
+  if(r.recommendation)h+=`<div class="rec"><b>RECOMMENDATION »</b> ${esc(r.recommendation)}</div>`;
+  h+=`</div>`;
+  ARTIFACT_ORDER.forEach(t=>{h+=renderArtifact(t,r);});
   $("canvas").innerHTML=h;
   if(!matchMedia("(prefers-reduced-motion: reduce)").matches){
     document.querySelectorAll("#canvas .val[data-n]").forEach(el=>{
