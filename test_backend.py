@@ -420,6 +420,56 @@ if hasattr(backend, "analyze_stream") and os.path.exists("sample_report.pdf"):
                 os.environ[k] = v
         os.environ.pop("DEMO_FALLBACK", None)
 
+
+# ── 19. FastAPI frontend server — written BEFORE the implementation ────────
+
+print("\n=== 19. FastAPI server ===")
+try:
+    import server as _srv
+    _has_srv = True
+except Exception as _e:
+    _has_srv = False
+    print(f"  (server import failed: {_e})")
+check("server module importable", _has_srv)
+if _has_srv and os.path.exists("sample_report.pdf"):
+    from fastapi.testclient import TestClient
+    _client = TestClient(_srv.app)
+    _r = _client.get("/")
+    check("serves the frontend at /",
+          _r.status_code == 200 and "FINVERIFY" in _r.text.upper())
+    check("frontend is self-contained (no tailwind CDN)",
+          "cdn.tailwindcss.com" not in _r.text)
+    check("frontend carries no fabricated tx hashes",
+          "8xA9" not in _r.text and "SETTLED" not in _r.text)
+    _saved = {k: os.environ.pop(k, None)
+              for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+    os.environ["DEMO_FALLBACK"] = "1"
+    try:
+        with open("sample_report.pdf", "rb") as fh:
+            _r = _client.post(
+                "/api/analyze",
+                files={"file": ("sample_report.pdf", fh, "application/pdf")},
+                data={"question": "Does revenue add up?"},
+            )
+        check("analyze endpoint streams", _r.status_code == 200)
+        _lines = [json.loads(l) for l in _r.text.strip().splitlines()]
+        _stages = [e["stage"] for e in _lines if e["status"] in ("ok", "fail")]
+        check("NDJSON events in CI order",
+              _stages == ["parse", "redact", "extract",
+                          "verify-math", "verify-citations", "release"],
+              f"got {_stages}")
+        check("release event carries the answer",
+              _lines[-1]["stage"] == "release"
+              and bool(_lines[-1]["result"].get("answer")))
+        check("server deleted the upload after analysis",
+              not any(fname.startswith("finverify_")
+                      for fname in os.listdir(tempfile.gettempdir())))
+    finally:
+        for k, v in _saved.items():
+            if v is not None:
+                os.environ[k] = v
+        os.environ.pop("DEMO_FALLBACK", None)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
