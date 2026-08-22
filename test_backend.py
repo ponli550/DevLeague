@@ -1046,6 +1046,22 @@ check("tiles flow through the registry, gates intact",
       "renderArtifact" in _h32 and "renderFallbackTable" in _h32
       and "const RENDERERS" in _h32)
 
+
+# ── 33. shareable interactive board — spec BEFORE code ─────────────────────
+
+print("\n=== 33. shareable board ===")
+_h33 = open(os.path.join(os.path.dirname(__file__), "web",
+                         "index.html")).read()
+check("share-board control exists", 'id="shareboard"' in _h33)
+check("board travels in the URL fragment, never to a server",
+      "#board=" in _h33 and "location.hash" in _h33)
+check("opening a board link renders it with a shared banner",
+      "SHARED BOARD" in _h33)
+check("link integrity digest computed client-side",
+      "crypto.subtle.digest" in _h33)
+check("audit root displayed on shared boards for on-chain verification",
+      "audit_log_root" in _h33)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
