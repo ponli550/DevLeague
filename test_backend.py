@@ -1009,6 +1009,24 @@ check("charts render as inline SVG, no library",
 check("unknown kinds degrade through the fallback, stated plainly",
       "not in the deterministic chart registry" in _html30)
 
+
+# ── 31. console retheme — spec BEFORE code ─────────────────────────────────
+
+print("\n=== 31. console retheme ===")
+_h31 = open(os.path.join(os.path.dirname(__file__), "web",
+                         "index.html")).read()
+check("new console tokens applied",
+      all(t in _h31.lower() for t in ("#08090a", "#3ddc97", "#a855f7", "#e4572e")))
+check("old background token fully retired", "#131313" not in _h31)
+check("three-column grid with the telemetry aside",
+      "grid-template-columns" in _h31 and "336px" in _h31)
+check("telemetry lives in its own aside", "PIPELINE TELEMETRY" in _h31.upper())
+check("no LegoParse contamination, no dead preconnects",
+      "legoparse" not in _h31.lower() and "fraunces" not in _h31.lower())
+check("registry and gates untouched",
+      "const RENDERERS" in _h31 and "renderFallbackTable" in _h31
+      and "not in the deterministic chart registry" in _h31)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
