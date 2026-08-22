@@ -48,6 +48,7 @@ main{flex:1;display:flex;min-height:0}
 .telemetry .ok{color:var(--teal)} .telemetry .fail{color:var(--orange)}
 .telemetry .st-parse{color:var(--teal)} .telemetry .st-redact{color:var(--orange)}
 .telemetry .st-extract{color:var(--purple)} .telemetry .st-verify-math,.telemetry .st-verify-citations{color:var(--teal)}
+.telemetry .st-analyse-patterns{color:var(--purple)}
 .telemetry .ms{color:var(--ink-faint);float:right}
 .cursor{color:var(--teal);animation:pulse 1s infinite}
 /* right column */
@@ -62,6 +63,10 @@ main{flex:1;display:flex;min-height:0}
 .answer .body{font-size:14px;line-height:1.6}
 .rec{border-left:4px solid var(--teal);background:rgba(20,241,149,.06);padding:12px 14px;margin-top:12px;font-size:13px;line-height:1.55}
 .rec b{color:var(--teal)}
+.insights{border:1px solid var(--line);border-left:4px solid var(--purple);background:rgba(153,69,255,.06);padding:14px 16px;margin-bottom:16px}
+.insights .caps{color:var(--purple);margin-bottom:8px;display:block;font-family:var(--mono);font-size:11px;letter-spacing:.06em}
+.insights ul{margin:0;padding-left:18px}
+.insights li{font-size:13px;line-height:1.55;margin:5px 0;color:var(--ink)}
 .flow{display:flex;align-items:stretch;gap:0;overflow-x:auto;padding:8px 0 16px}
 .card{width:380px;flex:none;background:var(--bg-lowest);border:1px solid var(--line);display:flex;flex-direction:column;transition:transform .18s ease,box-shadow .18s ease;transform-style:preserve-3d}
 .card:hover{transform:rotateY(-4deg) translateZ(14px) translateY(-2px)}
@@ -86,6 +91,8 @@ main{flex:1;display:flex;min-height:0}
 .grid2 .val{font-family:var(--mono);font-size:13px;font-weight:500}
 .variance{border:1px dashed rgba(255,77,0,.5);background:rgba(255,77,0,.05);color:var(--orange);font-family:var(--mono);font-size:12.5px;font-weight:700;padding:8px 10px}
 .variance::before{content:"⚠ "}
+.override{margin-top:8px;border:1px solid rgba(153,69,255,.4);background:rgba(153,69,255,.08);color:var(--purple);font-family:var(--mono);font-size:12px;padding:8px 10px;border-radius:6px}
+.override b{color:var(--teal)}
 .arrow{width:56px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--line);font-family:var(--mono);font-size:18px}
 .ghost{width:380px;flex:none;border:1px dashed rgba(76,67,85,.6);opacity:.45;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:260px;gap:8px}
 .sources{margin-top:8px}
@@ -200,6 +207,38 @@ function render(r){
   h+=`<div class="answer"><span class="caps">Analysis</span><div class="body">${esc(r.answer)}</div>`;
   if(r.recommendation)h+=`<div class="rec"><b>RECOMMENDATION »</b> ${esc(r.recommendation)}</div>`;
   h+=`</div>`;
+  if(r.insights){
+    const items=r.insights.split("\n").map(s=>s.trim()).filter(Boolean);
+    if(items.length){
+      h+=`<div class="insights"><span class="caps">Verified insights — built only from re-checked figures</span><ul>`;
+      items.forEach(it=>{h+=`<li>${esc(it)}</li>`;});
+      h+=`</ul></div>`;
+    }
+  }
+  if(r.patterns&&r.patterns.length){
+    h+=`<h2 class="caps section-gap">Patterns — spotted by the model, recomputed in Python</h2>`;
+    const klabel={composition:"Composition",ratio:"Ratio",sign:"Threshold",threshold:"Threshold"};
+    r.patterns.forEach(p=>{
+      const unver=!!p.error;
+      const isFlag=(p.kind==="sign"||p.kind==="threshold");
+      // Neutral relationship -> teal; a confirmed sign/threshold flag is
+      // an ADVERSE finding -> amber warning; unverifiable -> faint.
+      const col=unver?"var(--ink-faint)":(isFlag?"var(--amber)":"var(--teal)");
+      const tag=klabel[p.kind]||"Pattern";
+      const state=unver?"unverifiable":(isFlag?"flag":"confirmed");
+      let figure="";
+      if(!unver){
+        figure=(p.kind==="composition"||p.kind==="ratio")?`${fmt(p.actual)}%`:`${fmt(p.actual)}`;
+      }
+      h+=`<div class="answer" style="border-left-color:${col};margin-bottom:10px;padding:12px 14px">
+        <span class="caps" style="color:${col}">${isFlag&&!unver?"\u{1F6A9} ":""}${esc(tag)} ${state}</span>
+        <div class="body" style="font-size:13px;margin-top:4px">${esc(p.description||"")}</div>
+        ${unver
+          ? `<div class="mono" style="font-size:11px;color:var(--amber);margin-top:6px">${esc(p.error)}</div>`
+          : `<div class="mono" style="font-size:11px;color:${col};margin-top:6px">recomputed in Python: ${esc(figure)} · evidence: ${(p.evidence_fact_ids||[]).map(esc).join(", ")}</div>`}
+      </div>`;
+    });
+  }
   if(r.risks&&r.risks.length){
     h+=`<h2 class="caps section-gap">Risks — every one cites its evidence</h2>`;
     r.risks.forEach(k=>{
@@ -225,6 +264,7 @@ function render(r){
         </div>
         ${c.error?`<div class="variance" style="border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.05);color:var(--amber)">${esc(c.error)}</div>`:""}
         ${(!c.passed&&!c.error)?`<div class="variance">Δ VARIANCE: ${fmt(c.actual-c.expected)}</div>`:""}
+        ${(c.overridden&&c.expected!=null)?`<div class="override">🛡 model claimed <b>${fmt(c.model_stated)}</b> — ignored; verified against the document's cited <b>${fmt(c.expected)}</b></div>`:""}
       </div>
     </div>`;
     if(i<r.checks.length-1)h+=`<div class="arrow" style="animation-delay:${i*140+90}ms">→</div>`;

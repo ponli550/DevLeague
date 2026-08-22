@@ -390,7 +390,8 @@ if hasattr(backend, "analyze_stream") and os.path.exists("sample_report.pdf"):
         stages = [e["stage"] for e in events if e["status"] in ("ok", "fail")]
         check("stages run in CI order",
               stages == ["parse", "redact", "extract",
-                         "verify-math", "verify-citations", "release"],
+                         "verify-math", "verify-citations",
+                         "analyse-patterns", "release"],
               f"got {stages}")
         check("every completed stage is measured",
               all(e.get("elapsed_ms") is not None and e["elapsed_ms"] >= 0
@@ -456,7 +457,8 @@ if _has_srv and os.path.exists("sample_report.pdf"):
         _stages = [e["stage"] for e in _lines if e["status"] in ("ok", "fail")]
         check("NDJSON events in CI order",
               _stages == ["parse", "redact", "extract",
-                          "verify-math", "verify-citations", "release"],
+                          "verify-math", "verify-citations",
+                          "analyse-patterns", "release"],
               f"got {_stages}")
         check("release event carries the answer",
               _lines[-1]["stage"] == "release"
@@ -518,9 +520,285 @@ if os.path.exists("sample_report.pdf"):
         os.environ.pop("DEMO_FALLBACK", None)
 
 
-# ── 22. bounded retry before fallback (#34) — written BEFORE the code ──────
+# ── 22. Verified insights summary (Lab 1: "concise summaries") ─────────────
+# The insights summary must be COMPOSED from verified data, never carry a
+# number the pipeline did not re-check. Written to lock that guarantee.
 
-print("\n=== 22. bounded retry ===")
+print("\n=== 22. Verified insights summary ===")
+
+# The _empty_result() bug: an error/empty result must carry NO risks and an
+# empty insights string — never a placeholder.
+_er = backend._empty_result()
+check("empty result carries no phantom risks", _er["risks"] == [])
+check("empty result has an insights key", "insights" in _er)
+check("empty result insights is blank", _er["insights"] == "")
+check("empty result has no leftover placeholder ids",
+      "f1" not in json.dumps(_er))
+
+# build_insights composes from verified rows only. Note the descriptions
+# below deliberately CONTAIN unverified numbers (9,999,999 / 42% / 7,777) —
+# the masking guarantee is that none of those reach the output.
+_ins_facts = [{"id": "f1", "value": 1200000}, {"id": "f2", "value": 1150000},
+              {"id": "f4", "value": 2750000}]
+_ins_checks = [
+    {"description": "Stated total vs sum of segments (model claims 9,999,999)",
+     "operation": "sum", "expected": 2750000.0,
+     "actual": 2650000.0, "passed": False, "error": None},
+    {"description": "Revenue growth of a claimed 42% vs prior quarter",
+     "operation": "percent_change", "expected": 10.0,
+     "actual": 10.0, "passed": True, "error": None},
+    {"description": "Unresolvable ratio", "operation": "percent_change",
+     "expected": None, "actual": None,
+     "passed": False, "error": "cannot compute percent change from zero"},
+]
+_ins_risks = [
+    {"description": "headline off by RM 7,777 does not reconcile",
+     "severity": "high", "evidence_fact_ids": ["f1", "f4"]},
+    {"description": "trend inherits the gap", "severity": "medium",
+     "evidence_fact_ids": ["f2"]},
+]
+_ins_summary = {"facts_extracted": 3, "checks_run": 3,
+                "checks_passed": 1, "checks_failed": 1}
+_ins = backend.build_insights(_ins_facts, _ins_checks, _ins_risks, _ins_summary)
+check("insights is a non-empty string", isinstance(_ins, str) and bool(_ins))
+check("insights surfaces the verified trend", "Trend verified" in _ins)
+check("insights surfaces the confirmed exception", "Exception" in _ins)
+check("insights states the size of the gap", "100,000" in _ins)
+check("insights lists evidenced risks", "Risk (high)" in _ins
+      and "Risk (medium)" in _ins)
+check("high-severity risk is ordered before medium",
+      _ins.index("Risk (high)") < _ins.index("Risk (medium)"))
+check("insights reports coverage", "Coverage:" in _ins
+      and "re-checked in Python" in _ins)
+# Anti-hallucination (the real test): numbers the model wrote INTO its
+# descriptions must be masked, never echoed. These were fed above.
+check("model's unverified number in a check description is masked",
+      "9,999,999" not in _ins and "9999999" not in _ins)
+check("model's unverified percentage in a description is masked",
+      "42%" not in _ins)
+check("model's unverified number in a risk description is masked",
+      "7,777" not in _ins and "7777" not in _ins)
+check("masking leaves a placeholder", "#" in _ins)
+# But the Python-COMPUTED numbers must still be present and correct.
+check("computed figures survive masking",
+      "2,750,000" in _ins and "2,650,000" in _ins and "10%" in _ins)
+# Trend classification is structural (operation), not prose-driven: a sum
+# check whose description says "change" must NOT be labelled a trend.
+_kw = backend.build_insights(
+    [], [{"description": "net change in cash", "operation": "sum",
+          "expected": 5.0, "actual": 5.0, "passed": True, "error": None}],
+    [], {"facts_extracted": 0, "checks_run": 1})
+check("a passed sum is not mislabelled a trend", "Trend verified" not in _kw)
+# A failed check missing a figure degrades to just its description.
+_partial = backend.build_insights(
+    [], [{"description": "orphan", "operation": "sum", "expected": None,
+          "actual": None, "passed": False, "error": None}],
+    [], {"facts_extracted": 0, "checks_run": 1})
+check("partial failed check omits n/a numeric prose", "n/a" not in _partial)
+
+# Nothing to verify -> empty summary, not fabricated prose.
+check("no checks yields empty insights",
+      backend.build_insights([], [], [], {"checks_run": 0}) == "")
+
+# End-to-end: analyze() surfaces the insights via the release event.
+if os.path.exists("sample_report.pdf"):
+    _ks2 = {k: os.environ.pop(k, None)
+            for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+    os.environ["DEMO_FALLBACK"] = "1"
+    try:
+        _o2 = backend.analyze("sample_report.pdf",
+                              "Summarise the findings and any risks.")
+        check("analyze surfaces an insights summary",
+              bool(str(_o2.get("insights", "")).strip()))
+        check("insights mentions the discrepancy the checks found",
+              "Exception" in _o2["insights"] or "mismatch" in _o2["insights"])
+    finally:
+        for k, v in _ks2.items():
+            if v is not None:
+                os.environ[k] = v
+        os.environ.pop("DEMO_FALLBACK", None)
+
+
+# ── 23. Pattern analysis (Lab 1: "patterns") — after verify+citations ──────
+# Patterns are proposed by the model but RECOMPUTED in Python from cited
+# facts, dropped if uncited, and their prose is digit-masked. Written to
+# lock all of that.
+
+print("\n=== 23. Pattern analysis ===")
+check("prompt demands structured patterns", '"patterns"' in backend.SYSTEM_PROMPT)
+check("prompt names the three pattern kinds",
+      "composition" in backend.SYSTEM_PROMPT and "ratio" in backend.SYSTEM_PROMPT
+      and "sign" in backend.SYSTEM_PROMPT)
+check("empty result seeds patterns as []", backend._empty_result()["patterns"] == [])
+check("analyse-patterns is in the pipeline stages after citations",
+      backend.PIPELINE_STAGES.index("analyse-patterns")
+      > backend.PIPELINE_STAGES.index("verify-citations")
+      and backend.PIPELINE_STAGES.index("analyse-patterns")
+      < backend.PIPELINE_STAGES.index("release"))
+
+_pf = [{"id": "f1", "value": 1200000}, {"id": "f4", "value": 2750000},
+       {"id": "f5", "value": 1450000}, {"id": "f6", "value": -50000}]
+_pats = [
+    # composition: 1,200,000 / 2,750,000 * 100 = 43.64
+    {"kind": "composition", "description": "product share of revenue",
+     "operand_fact_ids": ["f1"], "against_fact_id": "f4",
+     "evidence_fact_ids": ["f1", "f4"]},
+    # ratio: 1,450,000 / 2,750,000 * 100 = 52.73
+    {"kind": "ratio", "description": "opex to revenue at a claimed 999%",
+     "operand_fact_ids": ["f5", "f4"], "evidence_fact_ids": ["f5", "f4"]},
+    # sign: -50,000 is negative -> the flagged condition holds
+    {"kind": "sign", "description": "net line is negative",
+     "operand_fact_ids": ["f6"], "evidence_fact_ids": ["f6"]},
+    # phantom evidence -> dropped
+    {"kind": "composition", "description": "phantom",
+     "operand_fact_ids": ["f1"], "against_fact_id": "f4",
+     "evidence_fact_ids": ["f1", "f99"]},
+    # unknown kind -> dropped
+    {"kind": "outlier", "description": "not supported",
+     "operand_fact_ids": ["f1"], "evidence_fact_ids": ["f1"]},
+    "not a dict",
+]
+_pr = backend.verify_patterns(_pf, _pats)
+check("only evidenced, known-kind patterns survive", len(_pr) == 3,
+      f"got {len(_pr)}")
+_by_kind = {p["kind"]: p for p in _pr}
+check("composition share recomputed in Python",
+      abs(_by_kind["composition"]["actual"] - 43.64) < 0.01)
+check("composition is confirmed", _by_kind["composition"]["passed"] is True)
+check("ratio recomputed in Python",
+      abs(_by_kind["ratio"]["actual"] - 52.73) < 0.01)
+check("sign pattern confirmed on a negative value",
+      _by_kind["sign"]["passed"] is True and _by_kind["sign"]["actual"] == -50000.0)
+# The model's self-serving expected value must never turn a pattern into a
+# free pass — patterns recompute, they do not trust typed numbers.
+_cheat = backend.verify_patterns(
+    [{"id": "f1", "value": 100}, {"id": "f2", "value": 400}],
+    [{"kind": "ratio", "description": "d", "operand_fact_ids": ["f1", "f2"],
+      "expected_value": 999, "evidence_fact_ids": ["f1", "f2"]}])
+check("a model-typed expected_value cannot fake a pattern pass",
+      _cheat[0]["passed"] is False and abs(_cheat[0]["actual"] - 25.0) < 0.01)
+# Unverifiable: a sign pattern whose fact is unusable comes back as error,
+# never as an established finding.
+_unver = backend.verify_patterns(
+    [{"id": "f1", "value": "not a number"}],
+    [{"kind": "sign", "description": "x", "operand_fact_ids": ["f1"],
+      "evidence_fact_ids": ["f1"]}])
+check("unusable pattern fact -> unverifiable, not passed",
+      _unver and _unver[0]["error"] is not None and _unver[0]["passed"] is False)
+
+# Digit-masking in the insights patterns section: the model's "999%" in a
+# pattern description must not survive; the Python-computed 52.73% must.
+_pins = backend.build_insights(_pf, [], [],
+                               {"facts_extracted": 4, "checks_run": 0}, _pr)
+check("pattern insights show a Python-computed figure", "52.73%" in _pins)
+check("model's number inside a pattern description is masked",
+      "999%" not in _pins)
+check("pattern insights carry a mask placeholder", "#" in _pins)
+
+# End-to-end via the fallback fixture: patterns surface in the release.
+if os.path.exists("sample_report.pdf"):
+    _ks3 = {k: os.environ.pop(k, None)
+            for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+    os.environ["DEMO_FALLBACK"] = "1"
+    try:
+        _po = backend.analyze("sample_report.pdf",
+                              "What patterns do you see?")
+        check("analyze surfaces verified patterns",
+              len(_po.get("patterns") or []) > 0)
+        _pfids = {f["id"] for f in _po["facts"]}
+        check("every surfaced pattern cites known facts",
+              all(set(p["evidence_fact_ids"]) <= _pfids
+                  for p in _po["patterns"]))
+        check("insights include a pattern line",
+              "Pattern verified" in _po["insights"]
+              or "Pattern (unverifiable)" in _po["insights"])
+    finally:
+        for k, v in _ks3.items():
+            if v is not None:
+                os.environ[k] = v
+        os.environ.pop("DEMO_FALLBACK", None)
+
+
+# ── 24. Improvement batch: negatives, fences, anti-cheat visibility, ───────
+#     suppressed counts, opex ratio, flag wording, UTF-8. Written to lock
+#     the senior-approved improvements A/C/B/H/I/F.
+
+print("\n=== 24. Improvement batch ===")
+
+# A — accounting-parentheses negatives.
+check("bracketed number is negative", backend._to_number("(50,000)") == -50000.0)
+check("bracketed decimal is negative",
+      abs(backend._to_number("(1,234.50)") - (-1234.5)) < 0.001)
+check("plain number stays positive", backend._to_number("1,200,000") == 1200000.0)
+check("currency-prefixed stays positive", backend._to_number("RM 2,750,000") == 2750000.0)
+check("a bracketed negative flips a difference",
+      backend.verify(
+          [{"id": "f1", "value": 100000}, {"id": "f2", "value": "(30,000)"}],
+          [{"description": "d", "operation": "sum",
+            "operand_fact_ids": ["f1", "f2"], "expected_value": 70000}]
+      )[0]["actual"] == 70000.0)
+
+# C — case-insensitive fence strip.
+check("uppercase JSON fence is stripped",
+      backend._extract_json('```JSON\n{"answer":"x"}\n```').get("answer") == "x")
+
+# H — anti-cheat visibility. The model's typed number is preserved for
+# display, the override is flagged, but expected/passed are UNCHANGED.
+_hf = [{"id": "f1", "value": 1200000}, {"id": "f2", "value": 1150000},
+       {"id": "f3", "value": 300000}, {"id": "f4", "value": 2750000}]
+_hc = [{"description": "components vs stated", "operation": "sum",
+        "operand_fact_ids": ["f1", "f2", "f3"], "against_fact_id": "f4",
+        "expected_value": 2650000}]  # model's self-serving number
+_hr = backend.verify(_hf, _hc)[0]
+check("model_stated preserves the model's typed number",
+      _hr["model_stated"] == 2650000.0)
+check("overridden flags the anti-cheat substitution", _hr["overridden"] is True)
+check("expected still comes from the cited fact (invariant)",
+      _hr["expected"] == 2750000.0)
+check("passed logic unchanged by the display field", _hr["passed"] is False)
+# No override flag when the model's number agrees with the cited fact.
+_hr2 = backend.verify(
+    [{"id": "f1", "value": 100}, {"id": "f2", "value": 200}, {"id": "f3", "value": 300}],
+    [{"description": "d", "operation": "sum", "operand_fact_ids": ["f1", "f2"],
+      "against_fact_id": "f3", "expected_value": 300}])[0]
+check("no override when model agrees with the cited figure",
+      _hr2["overridden"] is False)
+
+# I — suppressed-claim counts surface in the stage detail, not the summary.
+check("summary dict has no suppressed keys (invariant)",
+      set(backend._empty_result()["summary"].keys())
+      == {"facts_extracted", "checks_run", "checks_passed", "checks_failed"})
+
+# F — the fixture now exercises an opex-to-revenue ratio pattern.
+with open(os.path.join(os.path.dirname(__file__), "fixtures",
+                       "cached_response.json"), encoding="utf-8") as fh:
+    _fx4 = json.load(fh)
+check("prompt demands opex-to-revenue ratio",
+      "opex-to-revenue" in backend.SYSTEM_PROMPT.lower()
+      or "opex" in backend.SYSTEM_PROMPT.lower())
+check("fixture carries a ratio pattern",
+      any(p.get("kind") == "ratio" for p in _fx4.get("patterns", [])))
+
+# B — a confirmed sign/threshold pattern reads as a FLAG, not a reassuring
+# "verified". (Presentation wording; verify() passed logic is unchanged.)
+_flag = backend.build_insights(
+    [{"id": "f1", "value": -50000}], [], [],
+    {"facts_extracted": 1, "checks_run": 0},
+    [{"kind": "sign", "description": "net loss", "actual": -50000.0,
+      "passed": True, "error": None, "evidence_fact_ids": ["f1"]}])
+check("sign pattern insight is framed as a flag", "Flag confirmed" in _flag)
+check("sign pattern insight is not reassuring 'verified'",
+      "Pattern verified" not in _flag)
+
+# UTF-8 regression: the fixture loads without mojibake (the em-dash bug).
+_rec = str(_fx4.get("recommendation", ""))
+check("fixture recommendation loads without mojibake",
+      "â€" not in _rec and "—" in _fx4.get("answer", ""))
+
+
+# ── 25. bounded retry before fallback (#34) — written BEFORE the code ──────
+
+print("\n=== 25. bounded retry ===")
 import inspect as _insp
 _calls = {"n": 0}
 _orig = backend._call_deepseek
@@ -564,9 +842,9 @@ check("client call carries an explicit timeout",
       "timeout" in _insp.getsource(backend._call_deepseek))
 
 
-# ── 23. golden XLSX fixture (#33) — written BEFORE the code ────────────────
+# ── 26. golden XLSX fixture (#33) — written BEFORE the code ────────────────
 
-print("\n=== 23. golden XLSX ===")
+print("\n=== 26. golden XLSX ===")
 import hashlib as _hl
 check("make_sample exposes an xlsx generator",
       hasattr(__import__("make_sample"), "build_xlsx"))
@@ -590,9 +868,9 @@ if hasattr(__import__("make_sample"), "build_xlsx"):
     os.remove(_xp)
 
 
-# ── 24. Gradio app risks parity (#32) — written BEFORE the code ────────────
+# ── 27. Gradio app risks parity (#32) — written BEFORE the code ────────────
 
-print("\n=== 24. Gradio risks parity ===")
+print("\n=== 27. Gradio risks parity ===")
 try:
     import app as _app
     check("app.py imports (CI now guards the Gradio UI)", True)
@@ -609,8 +887,12 @@ if _app is not None:
               "Total does not reconcile" in _html and "f1" in _html)
         check("severity is visible as text, not color alone",
               "high" in _html.lower())
-        check("no risks -> empty string, no placeholder card",
-              _app.render_risks({"risks": []}) == "")
+        # In the current layout risks have their own panel, so an empty
+        # risk set renders a positive "no risks flagged" confirmation
+        # rather than nothing — it must not render a phantom risk card.
+        _empty_html = _app.render_risks({"risks": []})
+        check("no risks -> no phantom risk card",
+              "risk-card" not in _empty_html and "RISK" not in _empty_html.upper())
     check("FAKE payload carries risks for UI development",
           bool(_app.FAKE.get("risks")))
 
