@@ -1015,6 +1015,43 @@ check("charts render as inline SVG, no library",
 check("unknown kinds degrade through the fallback, stated plainly",
       "not in the deterministic chart registry" in _html30)
 
+
+# ── 31. console retheme — spec BEFORE code ─────────────────────────────────
+
+print("\n=== 31. console retheme ===")
+_h31 = open(os.path.join(os.path.dirname(__file__), "web",
+                         "index.html")).read()
+check("new console tokens applied",
+      all(t in _h31.lower() for t in ("#08090a", "#3ddc97", "#a855f7", "#e4572e")))
+check("old background token fully retired", "#131313" not in _h31)
+check("three-column grid with the telemetry aside",
+      "grid-template-columns" in _h31 and "336px" in _h31)
+check("telemetry lives in its own aside", "PIPELINE TELEMETRY" in _h31.upper())
+check("no LegoParse contamination, no dead preconnects",
+      "legoparse" not in _h31.lower() and "fraunces" not in _h31.lower())
+check("registry and gates untouched",
+      "const RENDERERS" in _h31 and "renderFallbackTable" in _h31
+      and "not in the deterministic chart registry" in _h31)
+
+
+# ── 32. dashboard-grid canvas — spec BEFORE code ───────────────────────────
+
+print("\n=== 32. dashboard canvas ===")
+_h32 = open(os.path.join(os.path.dirname(__file__), "web",
+                         "index.html")).read()
+check("12-column dashboard grid", ".dash{display:grid" in _h32
+      and "repeat(12," in _h32)
+check("KPI stat-tile row rendered from real summary fields",
+      "kpis:" in _h32 and "facts_extracted" in _h32
+      and "stat-tile" in _h32)
+check("deterministic reported-vs-calculated comparison chart",
+      "REPORTED VS CALCULATED" in _h32.upper())
+check("stage-timing tile fed by the real stream events",
+      "STAGE TIMINGS" in _h32.upper() and "lastEvents" in _h32)
+check("tiles flow through the registry, gates intact",
+      "renderArtifact" in _h32 and "renderFallbackTable" in _h32
+      and "const RENDERERS" in _h32)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
