@@ -1090,6 +1090,15 @@ check("engine presence probed, not assumed",
 check("viewer mode announces itself and disables execution",
       "VIEWER MODE" in _h35 and "renders shared boards" in _h35)
 
+
+# ── 36. cloud prod mode wrapper — spec BEFORE code ─────────────────────────
+
+print("\n=== 36. cloud wrapper ===")
+check("vercel function wrapper exists",
+      os.path.exists(os.path.join(os.path.dirname(__file__), "api", "index.py")))
+check("vercel.json routes to the app",
+      os.path.exists(os.path.join(os.path.dirname(__file__), "vercel.json")))
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
