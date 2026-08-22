@@ -1062,6 +1062,17 @@ check("link integrity digest computed client-side",
 check("audit root displayed on shared boards for on-chain verification",
       "audit_log_root" in _h33)
 
+
+# ── 34. KPI info affordance — spec BEFORE code ─────────────────────────────
+
+print("\n=== 34. KPI info ===")
+_h34 = open(os.path.join(os.path.dirname(__file__), "web",
+                         "index.html")).read()
+check("every KPI stat tile carries an (i) with an explanation",
+      _h34.count('class="info"') >= 1 and "kpi_info" in _h34
+      and all(k in _h34 for k in
+              ("recomputed in Python", "before any text reached the model")))
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
