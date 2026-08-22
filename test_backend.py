@@ -517,6 +517,52 @@ if os.path.exists("sample_report.pdf"):
                 os.environ[k] = v
         os.environ.pop("DEMO_FALLBACK", None)
 
+
+# ── 22. bounded retry before fallback (#34) — written BEFORE the code ──────
+
+print("\n=== 22. bounded retry ===")
+import inspect as _insp
+_calls = {"n": 0}
+_orig = backend._call_deepseek
+def _flaky(pages, q):
+    _calls["n"] += 1
+    if _calls["n"] == 1:
+        raise RuntimeError("transient network blip")
+    return {"answer": "x"}
+backend._call_deepseek = _flaky
+try:
+    _out, _cached = backend.ask_llm([("Page 1", "t")], "q")
+    check("one transient failure is retried and succeeds",
+          _out == {"answer": "x"} and _cached is False and _calls["n"] == 2,
+          f"calls={_calls['n']}")
+    _calls["n"] = 0
+    def _dead(pages, q):
+        _calls["n"] += 1
+        raise RuntimeError("hard down")
+    backend._call_deepseek = _dead
+    _oldfb = os.environ.pop("DEMO_FALLBACK", None)
+    try:
+        try:
+            backend.ask_llm([("Page 1", "t")], "q")
+            check("double failure raises", False)
+        except RuntimeError as e:
+            check("double failure raises after exactly 2 attempts",
+                  _calls["n"] == 2, f"calls={_calls['n']}")
+            check("error names the retry", "retry" in str(e).lower(), str(e))
+        _calls["n"] = 0
+        os.environ["DEMO_FALLBACK"] = "1"
+        _out, _cached = backend.ask_llm([("Page 1", "t")], "q")
+        check("fallback engages only after the retry",
+              _cached is True and _calls["n"] == 2, f"calls={_calls['n']}")
+    finally:
+        os.environ.pop("DEMO_FALLBACK", None)
+        if _oldfb is not None:
+            os.environ["DEMO_FALLBACK"] = _oldfb
+finally:
+    backend._call_deepseek = _orig
+check("client call carries an explicit timeout",
+      "timeout" in _insp.getsource(backend._call_deepseek))
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
