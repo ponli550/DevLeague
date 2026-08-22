@@ -252,22 +252,6 @@ def render_summary(result: dict) -> str:
 </div>"""
 
 
-def render_risks(result: dict) -> str:
-    """Severity-coded risk cards, evidence ids visible — parity with the
-    primary web UI. Empty input renders nothing, not a placeholder."""
-    risks = result.get("risks") or []
-    html = ""
-    for k in risks:
-        sev = str(k.get("severity", "medium")).upper()
-        cls = {"HIGH": "mismatch-card", "MEDIUM": "warning-card"}.get(sev, "source-card")
-        ev = ", ".join(k.get("evidence_fact_ids") or [])
-        html += (f'<div class="{cls}"><strong>⚠️ {sev} RISK:</strong> '
-                 f'{k.get("description","")}<br>'
-                 f'<span style="font-size:12px;color:#64748B;">evidence: '
-                 f'<code>{ev}</code></span></div>')
-    return html
-
-
 def render_checks(result: dict) -> str:
     checks = result.get("checks") or []
     html = render_risks(result)
@@ -335,8 +319,9 @@ def render_risks(result: dict) -> str:
     filtered to require citing evidence facts."""
     risks = result.get("risks") or []
     if not risks:
-        return ('<div class="verified-card">No risks flagged — the figures '
-                "reviewed reconcile.</div>")
+        # No card at all: absence of flagged risks is not an assertion
+        # that the figures reconcile — the checks column says that.
+        return ""
     import html as _html
     order = {"high": 0, "medium": 1, "low": 2}
     icon = {"high": "🔴", "medium": "🟠", "low": "🟡"}
