@@ -375,6 +375,51 @@ with open(os.path.join(os.path.dirname(__file__), "fixtures",
 check("fixture exercises against_fact_id",
       any(c.get("against_fact_id") for c in _fx2.get("checks", [])))
 
+
+# ── 18. analyze_stream — in-product CI pipeline, written BEFORE the code ───
+
+print("\n=== 18. analyze_stream (CI pipeline) ===")
+check("backend exposes analyze_stream", hasattr(backend, "analyze_stream"))
+if hasattr(backend, "analyze_stream") and os.path.exists("sample_report.pdf"):
+    _keys = {k: os.environ.pop(k, None)
+             for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+    os.environ["DEMO_FALLBACK"] = "1"
+    try:
+        events = list(backend.analyze_stream(
+            "sample_report.pdf", "Does revenue add up?"))
+        stages = [e["stage"] for e in events if e["status"] in ("ok", "fail")]
+        check("stages run in CI order",
+              stages == ["parse", "redact", "extract",
+                         "verify-math", "verify-citations", "release"],
+              f"got {stages}")
+        check("every completed stage is measured",
+              all(e.get("elapsed_ms") is not None and e["elapsed_ms"] >= 0
+                  for e in events if e["status"] in ("ok", "fail")))
+        check("gate: nothing before release carries the answer",
+              all(not e.get("result") for e in events[:-1]))
+        final = events[-1]
+        check("release carries the full result",
+              final["stage"] == "release" and isinstance(final.get("result"), dict)
+              and final["result"].get("error") is None
+              and bool(final["result"].get("answer")))
+        ref = backend.analyze("sample_report.pdf", "Does revenue add up?")
+        check("analyze() and stream release agree on shape",
+              set(ref.keys()) == set(final["result"].keys()))
+        # hard failure: pipeline stops, later stages skip, error still released
+        bad = list(backend.analyze_stream(None, "q"))
+        bstat = {e["stage"]: e["status"] for e in bad}
+        check("hard fail stops at parse", bstat.get("parse") == "fail")
+        check("later stages are skipped, not run",
+              bstat.get("extract") == "skip" and bstat.get("verify-math") == "skip")
+        check("failure is still released with an error",
+              bad[-1]["stage"] == "release"
+              and bad[-1]["result"].get("error") is not None)
+    finally:
+        for k, v in _keys.items():
+            if v is not None:
+                os.environ[k] = v
+        os.environ.pop("DEMO_FALLBACK", None)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
