@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .venv/
 sample_report.pdf
+sample_report.xlsx

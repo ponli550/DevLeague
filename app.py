@@ -34,6 +34,11 @@ FAKE = {
          "expected": 2750000.0, "actual": 2650000.0,
          "passed": False, "error": None},
     ],
+    "risks": [
+        {"description": "Stated total revenue exceeds the sum of its "
+         "segments by RM 100,000.", "severity": "high",
+         "evidence_fact_ids": ["f1", "f2", "f3", "f4"]},
+    ],
     "summary": {"facts_extracted": 4, "checks_run": 1,
                 "checks_passed": 0, "checks_failed": 1},
     "redaction_count": 4,
@@ -187,9 +192,25 @@ def render_summary(result: dict) -> str:
 </div>"""
 
 
+def render_risks(result: dict) -> str:
+    """Severity-coded risk cards, evidence ids visible — parity with the
+    primary web UI. Empty input renders nothing, not a placeholder."""
+    risks = result.get("risks") or []
+    html = ""
+    for k in risks:
+        sev = str(k.get("severity", "medium")).upper()
+        cls = {"HIGH": "mismatch-card", "MEDIUM": "warning-card"}.get(sev, "source-card")
+        ev = ", ".join(k.get("evidence_fact_ids") or [])
+        html += (f'<div class="{cls}"><strong>⚠️ {sev} RISK:</strong> '
+                 f'{k.get("description","")}<br>'
+                 f'<span style="font-size:12px;color:#64748B;">evidence: '
+                 f'<code>{ev}</code></span></div>')
+    return html
+
+
 def render_checks(result: dict) -> str:
     checks = result.get("checks") or []
-    html = ""
+    html = render_risks(result)
 
     rec = (result.get("recommendation") or "").strip()
     if rec:
