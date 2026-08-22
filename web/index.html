@@ -101,6 +101,13 @@ main{flex:1;display:flex;min-height:0}
 .src .pin{color:var(--teal);font-family:var(--mono);font-size:11px;margin-top:6px}
 h2.caps{color:var(--ink-faint);font-size:11px}
 .section-gap{margin-bottom:16px}
+@media (prefers-reduced-motion: no-preference){
+  @keyframes cardIn{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:none}}
+  @keyframes drawIn{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+  .flow .card,.flow .ghost{animation:cardIn .5s cubic-bezier(.2,.8,.2,1) both}
+  .flow .arrow{transform-origin:left;animation:drawIn .3s ease both}
+  .src{animation:cardIn .4s ease both}
+}
 @media (max-width:860px){.left{width:100%;min-width:0}.right{display:none}}
 </style>
 </head>
@@ -198,23 +205,23 @@ function render(r){
   r.checks.forEach((c,i)=>{
     const cls=c.error?"warn":(c.passed?"ok":"bad");
     const badge=c.error?"UNVERIFIABLE":(c.passed?"VERIFIED":"DISCREPANCY");
-    h+=`<div class="card ${cls}">
+    h+=`<div class="card ${cls}" style="animation-delay:${i*140}ms">
       <div class="card-head"><h3>${esc(c.description)}</h3><span class="badge ${cls}">${badge}</span></div>
       <div class="card-body">
         <div class="grid2">
-          <div><span class="caps">Reported</span><span class="val">${fmt(c.expected)}</span></div>
-          <div><span class="caps">Calculated</span><span class="val" style="color:${cls==="ok"?"var(--teal)":cls==="bad"?"var(--orange)":"var(--ink)"}">${fmt(c.actual)}</span></div>
+          <div><span class="caps">Reported</span><span class="val" data-n="${c.expected??""}">${fmt(c.expected)}</span></div>
+          <div><span class="caps">Calculated</span><span class="val" data-n="${c.actual??""}" style="color:${cls==="ok"?"var(--teal)":cls==="bad"?"var(--orange)":"var(--ink)"}">${fmt(c.actual)}</span></div>
         </div>
         ${c.error?`<div class="variance" style="border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.05);color:var(--amber)">${esc(c.error)}</div>`:""}
         ${(!c.passed&&!c.error)?`<div class="variance">Δ VARIANCE: ${fmt(c.actual-c.expected)}</div>`:""}
       </div>
     </div>`;
-    if(i<r.checks.length-1)h+=`<div class="arrow">→</div>`;
+    if(i<r.checks.length-1)h+=`<div class="arrow" style="animation-delay:${i*140+90}ms">→</div>`;
   });
-  h+=`<div class="arrow">→</div><div class="ghost"><span style="font-size:28px;color:var(--line)">+</span><span class="caps" style="color:var(--ink-faint)">AWAITING NEXT PERIOD</span></div></div>`;
+  h+=`<div class="arrow" style="animation-delay:${r.checks.length*140}ms">→</div><div class="ghost" style="animation-delay:${r.checks.length*140+90}ms"><span style="font-size:28px;color:var(--line)">+</span><span class="caps" style="color:var(--ink-faint)">AWAITING NEXT PERIOD</span></div></div>`;
   h+=`<div class="sources"><h2 class="caps">Sources — every number pinned to a verbatim quote</h2><div class="src-grid">`;
-  r.facts.forEach(f=>{
-    h+=`<div class="src"><div class="top"><span class="claim">${esc(f.claim)}</span><span class="page">${esc(f.page)}</span></div>
+  r.facts.forEach((f,j)=>{
+    h+=`<div class="src" style="animation-delay:${j*70}ms"><div class="top"><span class="claim">${esc(f.claim)}</span><span class="page">${esc(f.page)}</span></div>
       <div class="val">${fmt(f.value)}</div>
       <blockquote>${esc(f.quote||"(no quote)")}</blockquote>
       ${f.verified_in_source?`<div class="pin">✓ quote verbatim in source</div>`:`<div class="flag">⚠ quote NOT found verbatim in source</div>`}
@@ -222,6 +229,16 @@ function render(r){
   });
   h+=`</div></div>`;
   $("canvas").innerHTML=h;
+  if(!matchMedia("(prefers-reduced-motion: reduce)").matches){
+    document.querySelectorAll("#canvas .val[data-n]").forEach(el=>{
+      const n=parseFloat(el.dataset.n);if(!Number.isFinite(n))return;
+      const t0=performance.now(),D=550;
+      const step=t=>{const p=Math.min(1,(t-t0)/D),e=1-Math.pow(1-p,3);
+        el.textContent=fmt(n*e);
+        if(p<1)requestAnimationFrame(step);else el.textContent=fmt(n);};
+      requestAnimationFrame(step);
+    });
+  }
 }
 </script>
 </body>
