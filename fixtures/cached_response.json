@@ -68,6 +68,21 @@
     }
   ],
   "recommendation": "Reconcile the RM 100,000 gap between the stated total revenue (RM 2,750,000) and the sum of its segments (RM 2,650,000) before this report is signed off.",
+  "patterns": [
+    {
+      "kind": "composition",
+      "description": "Product revenue is the largest single share of total revenue.",
+      "operand_fact_ids": ["f1"],
+      "against_fact_id": "f4",
+      "evidence_fact_ids": ["f1", "f4"]
+    },
+    {
+      "kind": "ratio",
+      "description": "Services revenue relative to product revenue.",
+      "operand_fact_ids": ["f2", "f1"],
+      "evidence_fact_ids": ["f1", "f2"]
+    }
+  ],
   "risks": [
     {
       "description": "Stated total revenue exceeds the sum of its segments by RM 100,000 — the composition of the headline figure does not reconcile.",

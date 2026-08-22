@@ -34,6 +34,28 @@ FAKE = {
          "expected": 2750000.0, "actual": 2650000.0,
          "passed": False, "error": None},
     ],
+    "risks": [
+        {"description": ("Stated total revenue exceeds the sum of its "
+                         "segments by RM 100,000 — the headline figure does "
+                         "not reconcile."),
+         "severity": "high", "evidence_fact_ids": ["f1", "f2", "f3", "f4"]},
+    ],
+    "patterns": [
+        {"kind": "composition",
+         "description": "Product revenue is the largest single share of "
+                        "total revenue.",
+         "actual": 43.64, "passed": True, "error": None,
+         "evidence_fact_ids": ["f1", "f4"]},
+    ],
+    "insights": (
+        "Exception: Stated total vs sum of segments did not reconcile — "
+        "document states 2,750,000, the numbers add to 2,650,000 "
+        "(off by 100,000).\n"
+        "Risk (high): Stated total revenue exceeds the sum of its segments "
+        "by RM # — the headline figure does not reconcile.\n"
+        "Coverage: 4 figure(s) extracted, 1 calculation(s) re-checked in "
+        "Python — 1 mismatch(es), 0 unverifiable."
+    ),
     "summary": {"facts_extracted": 4, "checks_run": 1,
                 "checks_passed": 0, "checks_failed": 1},
     "redaction_count": 4,
@@ -157,6 +179,49 @@ CUSTOM_CSS = """
     background: rgba(15, 23, 42, 0.10) !important;
     color: #334155 !important; padding: 1px 5px; border-radius: 4px;
 }
+
+/* Verified insights summary — same pin-both-colours discipline so it
+   stays readable in light and dark. */
+.insights-card {
+    background: #EEF2FF !important; border-left: 4px solid #4F46E5;
+    padding: 14px 18px; border-radius: 8px; margin: 10px 0;
+}
+.insights-card, .insights-card * { color: #312E81 !important; }
+.insights-list { margin: 8px 0 0 0; padding-left: 20px; }
+.insights-list li { margin: 4px 0; line-height: 1.4; }
+.insights-note {
+    font-size: 12px; margin-top: 8px; opacity: 0.85;
+}
+
+/* Risk cards, colour-graded by severity. */
+.risk-card {
+    padding: 12px 16px; border-radius: 8px; margin: 8px 0;
+    border-left: 4px solid #9CA3AF;
+}
+.risk-card, .risk-card * { color: #1E293B !important; }
+.risk-high   { background: #FEE2E2 !important; border-left-color: #DC2626; }
+.risk-high,   .risk-high *   { color: #7F1D1D !important; }
+.risk-medium { background: #FEF3C7 !important; border-left-color: #D97706; }
+.risk-medium, .risk-medium * { color: #78350F !important; }
+.risk-low    { background: #FEFCE8 !important; border-left-color: #CA8A04; }
+.risk-low,    .risk-low *    { color: #713F12 !important; }
+.risk-cite {
+    font-size: 12px; margin-top: 6px; opacity: 0.8;
+    font-family: ui-monospace, Menlo, monospace;
+}
+
+/* Pattern cards — teal for confirmed, grey for unverifiable. */
+.pattern-card {
+    padding: 12px 16px; border-radius: 8px; margin: 8px 0;
+    border-left: 4px solid #0D9488;
+}
+.pattern-card, .pattern-card * { color: #134E4A !important; }
+.pattern-ok { background: #CCFBF1 !important; border-left-color: #0D9488; }
+.pattern-ok, .pattern-ok * { color: #134E4A !important; }
+.pattern-unver {
+    background: #F1F5F9 !important; border-left-color: #94A3B8;
+}
+.pattern-unver, .pattern-unver * { color: #334155 !important; }
 """
 
 # ── Renderers ──────────────────────────────────────────────────────────────
@@ -229,6 +294,83 @@ def render_checks(result: dict) -> str:
     return html
 
 
+def render_insights(result: dict) -> str:
+    """The verified insights summary — one card per line. Composed by the
+    backend from checked data only, so it is safe to show prominently."""
+    text = (result.get("insights") or "").strip()
+    if not text:
+        return ""
+    import html as _html
+    rows = ""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rows += f'<li>{_html.escape(line)}</li>'
+    return ('<div class="insights-card"><strong>🧠 Verified insights</strong>'
+            f'<ul class="insights-list">{rows}</ul>'
+            '<div class="insights-note">Built only from figures re-checked '
+            'in Python and risks that cite their evidence — no unverified '
+            'number can appear here.</div></div>')
+
+
+def render_risks(result: dict) -> str:
+    """Trends, exceptions, and risks the model flagged — each already
+    filtered to require citing evidence facts."""
+    risks = result.get("risks") or []
+    if not risks:
+        return ('<div class="verified-card">No risks flagged — the figures '
+                "reviewed reconcile.</div>")
+    import html as _html
+    order = {"high": 0, "medium": 1, "low": 2}
+    icon = {"high": "🔴", "medium": "🟠", "low": "🟡"}
+    out = ""
+    for r in sorted(risks, key=lambda x: order.get(x.get("severity"), 1)):
+        sev = r.get("severity", "medium")
+        sev = sev if sev in order else "medium"
+        cite = _html.escape(", ".join(r.get("evidence_fact_ids") or []))
+        desc = _html.escape(str(r.get("description", "")))
+        out += (f'<div class="risk-card risk-{sev}">'
+                f'<strong>{icon.get(sev,"🟠")} {sev.upper()} risk:</strong> '
+                f'{desc}'
+                f'<div class="risk-cite">Evidence: {cite}</div></div>')
+    return out
+
+
+def render_patterns(result: dict) -> str:
+    """Composition / ratio / sign patterns the model spotted and Python
+    recomputed. Descriptions are already digit-masked by the backend;
+    only the Python-computed figure is shown for confirmed patterns."""
+    patterns = result.get("patterns") or []
+    if not patterns:
+        return ""
+    import html as _html
+    label = {"composition": "Composition", "ratio": "Ratio",
+             "sign": "Threshold", "threshold": "Threshold"}
+    out = ""
+    for p in patterns:
+        kind = p.get("kind", "")
+        desc = _html.escape(str(p.get("description", "")))
+        cite = _html.escape(", ".join(p.get("evidence_fact_ids") or []))
+        tag = label.get(kind, "Pattern")
+        if p.get("error"):
+            out += (f'<div class="pattern-card pattern-unver">'
+                    f'<strong>📈 {tag} (unverifiable):</strong> {desc}<br>'
+                    f'<span class="risk-cite">{_html.escape(str(p["error"]))}</span>'
+                    f'</div>')
+        elif p.get("passed"):
+            act = p.get("actual")
+            if kind in ("composition", "ratio"):
+                figure = f'<code>{_fmt(act)}%</code>'
+            else:
+                figure = f'<code>{_fmt(act)}</code>'
+            out += (f'<div class="pattern-card pattern-ok">'
+                    f'<strong>📈 {tag} confirmed:</strong> {desc}<br>'
+                    f'Computed in Python: {figure}'
+                    f'<div class="risk-cite">Evidence: {cite}</div></div>')
+    return out
+
+
 def render_facts(result: dict) -> str:
     facts = result.get("facts") or []
     if not facts:
@@ -269,6 +411,7 @@ STAGE_LABELS = [
     ("extract", "Extract facts (model)"),
     ("verify-math", "Verify arithmetic"),
     ("verify-citations", "Verify citations"),
+    ("analyse-patterns", "Analyse patterns"),
     ("release", "Release to you"),
 ]
 
@@ -299,15 +442,16 @@ def run(file_path, question):
     if USE_FAKE:
         states = {k: {"status": "ok", "detail": "", "elapsed_ms": 0}
                   for k, _ in STAGE_LABELS}
-        yield ("", "", "", "", "", render_pipeline(states))
-        yield (FAKE["answer"], render_summary(FAKE), render_checks(FAKE),
+        yield ("", "", "", "", "", "", "", "", render_pipeline(states))
+        yield (FAKE["answer"], render_summary(FAKE), render_insights(FAKE),
+               render_checks(FAKE), render_patterns(FAKE), render_risks(FAKE),
                render_facts(FAKE), render_redacted(FAKE),
                render_pipeline(states))
         return
 
     import backend
     states = {}
-    blank = ("", "", "", "", "")
+    blank = ("", "", "", "", "", "", "", "")
     yield (*blank, render_pipeline(states))
     result = None
     for ev in backend.analyze_stream(file_path, question):
@@ -322,13 +466,16 @@ def run(file_path, question):
     # as literal angle-bracket soup.
     if result.get("error"):
         error_html = f'<div class="warning-card">⚠️ {result["error"]}</div>'
-        yield ("", error_html, "", "", "", render_pipeline(states))
+        yield ("", error_html, "", "", "", "", "", "", render_pipeline(states))
         return
 
     yield (
         result.get("answer", ""),
         render_summary(result),
+        render_insights(result),
         render_checks(result),
+        render_patterns(result),
+        render_risks(result),
         render_facts(result),
         render_redacted(result),
         render_pipeline(states),
@@ -341,7 +488,7 @@ def clear(file_path):
     promise in the notice below true, not aspirational."""
     import backend
     backend.purge_upload(file_path)
-    return None, "", "", "", "", "", "", ""
+    return None, "", "", "", "", "", "", "", "", "", ""
 
 
 # ── App layout ─────────────────────────────────────────────────────────────
@@ -385,23 +532,29 @@ with gr.Blocks(title="FinVerify — AI Financial Report Verifier") as demo:
             pipeline_out = gr.HTML()
             answer_out = gr.Textbox(label="Analysis", lines=5, interactive=False)
             summary_out = gr.HTML()
+            insights_out = gr.HTML()
             checks_out = gr.HTML()
+            gr.Markdown("### 📈 Patterns")
+            patterns_out = gr.HTML()
+            gr.Markdown("### ⚠️ Trends, exceptions & risks")
+            risks_out = gr.HTML()
 
         # ── Right: source citations ───────────────────────────────────
         with gr.Column(scale=1, min_width=280):
             gr.Markdown("### 📄 Sources")
             facts_out = gr.HTML()
 
-    # Wire buttons
+    # Wire buttons. Output order MUST match the tuples yielded by run().
     go.click(
         run, [file_in, question_in],
-        [answer_out, summary_out, checks_out, facts_out, redacted_out,
-         pipeline_out],
+        [answer_out, summary_out, insights_out, checks_out, patterns_out,
+         risks_out, facts_out, redacted_out, pipeline_out],
     )
     clear_btn.click(
         clear, [file_in],
-        [file_in, question_in, answer_out, summary_out, checks_out,
-         facts_out, redacted_out, pipeline_out],
+        [file_in, question_in, answer_out, summary_out, insights_out,
+         checks_out, patterns_out, risks_out, facts_out, redacted_out,
+         pipeline_out],
     )
 
 
