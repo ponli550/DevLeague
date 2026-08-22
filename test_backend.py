@@ -589,6 +589,31 @@ if hasattr(__import__("make_sample"), "build_xlsx"):
           "2,750,000" in _text or "2750000" in _text)
     os.remove(_xp)
 
+
+# ── 24. Gradio app risks parity (#32) — written BEFORE the code ────────────
+
+print("\n=== 24. Gradio risks parity ===")
+try:
+    import app as _app
+    check("app.py imports (CI now guards the Gradio UI)", True)
+except Exception as _e:
+    check("app.py imports (CI now guards the Gradio UI)", False, str(_e))
+    _app = None
+if _app is not None:
+    check("app exposes render_risks", hasattr(_app, "render_risks"))
+    if hasattr(_app, "render_risks"):
+        _html = _app.render_risks({"risks": [
+            {"description": "Total does not reconcile", "severity": "high",
+             "evidence_fact_ids": ["f1", "f4"]}]})
+        check("risk description and evidence rendered",
+              "Total does not reconcile" in _html and "f1" in _html)
+        check("severity is visible as text, not color alone",
+              "high" in _html.lower())
+        check("no risks -> empty string, no placeholder card",
+              _app.render_risks({"risks": []}) == "")
+    check("FAKE payload carries risks for UI development",
+          bool(_app.FAKE.get("risks")))
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
