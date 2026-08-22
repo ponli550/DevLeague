@@ -1,48 +1,57 @@
-# FinVerify
+# FinVerify 🔍
 
-AI-powered financial report analysis with independent verification.
-DevLeague Lab 1 (Experian). Every number cited to its source; every
-calculation re-checked deterministically in Python — no `eval`, ever.
+**AI-powered financial report analysis that refuses to believe itself.**
+DevLeague Lab 1 (Experian). Every number the model extracts is recomputed
+deterministically in Python, pinned to a verbatim source quote, and nothing
+renders until it has passed a visible CI pipeline. 🧮 ≠ 🤖
+
+> LLMs are text engines. Ours is not allowed near a calculator —
+> it proposes, Python disposes. 😤
+
+## The dashboard
+
+![Verified pipeline run](docs/screenshots/verified_run.png)
+*A live run: KPI tiles (hover the ⓘ), the model-chosen chart drawn only
+from verified facts, reported-vs-calculated comparison, evidenced risks,
+measured stage timings, the caught RM 100k discrepancy, and every source
+quote-pinned.*
+
+## Pipeline
+
+```mermaid
+flowchart LR
+    A[📄 PDF / XLSX] --> B[🔒 PDPA redaction<br/>local, before any model]
+    B --> C[🤖 DeepSeek<br/>strict JSON extraction]
+    C --> D[🧮 Deterministic verify<br/>no eval, fixed ops]
+    D --> E[📌 Verbatim quote pinning]
+    E --> F[🧩 Patterns recomputed]
+    F --> G[🛡️ Release gate<br/>hash-chained audit log]
+    G --> H[📊 Dashboard<br/>shareable via URL fragment]
+```
 
 ## Run
 
 ```bash
 uv sync
-cp .env.example .env        # put your DEEPSEEK_API_KEY in .env
-uv run python make_sample.py   # generates sample_report.pdf
-uv run python test_backend.py  # 69 local tests, zero API cost
-uv run python server.py        # primary UI (FastAPI, http://127.0.0.1:7861)
-uv run python app.py           # alternative Gradio UI
+cp .env.example .env            # DEEPSEEK_API_KEY
+uv run python make_sample.py    # sample with a planted RM 100k error
+uv run python test_backend.py   # 217 tests, offline, zero API cost ✅
+uv run python server.py         # http://127.0.0.1:7861
 ```
 
-## Screenshots
+## Why trust it 🧾
 
-![Verified pipeline run](docs/screenshots/verified_run.png)
-*A live run: the planted RM 100k mismatch caught, the trend verified at 10.0%, an evidenced risk, and every number pinned to a verbatim source quote.*
-
-## Pipeline
-
-upload → parse (pdfplumber/openpyxl) → PII redaction (local, before any
-text reaches the model) → DeepSeek strict-JSON extraction → deterministic
-verification (sum/difference/percent_change) → verbatim-quote citation
-check → UI.
-
-`DEMO_FALLBACK=1` swaps a failed model call for a cached fixture — the
-UI banners it as CACHED and verification still runs for real. Keep it
-`0` during development.
-
-## Privacy (PDPA)
-
-Only redacted text leaves the machine, never the file. NRIC (date-
-validated), email, MY phone, honorific/patronymic/cue-based names, and
-the PDF `/Author` metadata name are masked; per-run counts are shown in
-the UI, and the exact transmitted text is inspectable under "What left
-this machine". Clear Session deletes the uploaded temp file from disk.
-Known limits (stated in-app): bare names without title/patronymic/cue,
-and PII inside scanned images.
+| Claim | Enforcement |
+|---|---|
+| Model never does the math | `grep -F "eval(" backend.py` → nothing; 3 fixed ops only |
+| No self-graded checks | expected values resolve from **cited** facts (`against_fact_id`) |
+| Quotes are real | every operand string-matched into the source |
+| PII never reaches the model | NRIC (date-validated), emails, phones, names, PDF author — masked first, counts measured |
+| Telemetry can't be doctored | every event hash-chained + HMAC-signed; root in the release |
+| Charts can't lie | model picks the form, only verified facts supply data; unknown kinds degrade to the table |
+| Boards share like Power BI | whole dashboard rides the URL **fragment** — no server, no storage 📤 |
 
 ## Contributing & developer tips
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) — setup in four numbered steps, the
-local NDJSON API contract, the six load-bearing rules (each backed by a
-test), and the sharp edges worth knowing before your first commit.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/PITCH.md](docs/PITCH.md) /
+[docs/RUNBOOK.md](docs/RUNBOOK.md). Test-first or it didn't happen. 🚦
