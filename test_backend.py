@@ -1027,6 +1027,25 @@ check("registry and gates untouched",
       "const RENDERERS" in _h31 and "renderFallbackTable" in _h31
       and "not in the deterministic chart registry" in _h31)
 
+
+# ── 32. dashboard-grid canvas — spec BEFORE code ───────────────────────────
+
+print("\n=== 32. dashboard canvas ===")
+_h32 = open(os.path.join(os.path.dirname(__file__), "web",
+                         "index.html")).read()
+check("12-column dashboard grid", ".dash{display:grid" in _h32
+      and "repeat(12," in _h32)
+check("KPI stat-tile row rendered from real summary fields",
+      "kpis:" in _h32 and "facts_extracted" in _h32
+      and "stat-tile" in _h32)
+check("deterministic reported-vs-calculated comparison chart",
+      "REPORTED VS CALCULATED" in _h32.upper())
+check("stage-timing tile fed by the real stream events",
+      "STAGE TIMINGS" in _h32.upper() and "lastEvents" in _h32)
+check("tiles flow through the registry, gates intact",
+      "renderArtifact" in _h32 and "renderFallbackTable" in _h32
+      and "const RENDERERS" in _h32)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
