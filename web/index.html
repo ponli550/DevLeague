@@ -153,7 +153,9 @@ h2.caps{color:var(--ink-faint);font-size:11px}
     </div>
   </div>
   <div class="right">
-    <div class="panel-head"><span class="caps" style="color:var(--ink-faint)">EVOLUTION_CANVAS</span><span class="caps" id="srcflag" style="color:var(--ink-faint)"></span></div>
+    <div class="panel-head"><span class="caps" style="color:var(--ink-faint)">EVOLUTION_CANVAS</span><span style="display:flex;gap:12px;align-items:center">
+      <button id="shareboard" class="caps" style="display:none;background:none;border:1px solid var(--info);color:var(--info);padding:4px 10px;cursor:pointer">SHARE BOARD</button>
+      <span class="caps" id="srcflag" style="color:var(--ink-faint)"></span></span></div>
     <div class="canvas-wrap" id="canvas">
       <div class="idle">
         <div class="big">AWAITING DATA INGESTION…</div>
@@ -174,7 +176,51 @@ h2.caps{color:var(--ink-faint);font-size:11px}
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt=n=>n==null?"n/a":Number(n).toLocaleString("en-US",{maximumFractionDigits:2});
-let file=null,lastEvents=[];
+let file=null,lastEvents=[],lastResult=null;
+// ── Shareable board: the whole released result rides the URL FRAGMENT —
+// fragments never reach a server, so sharing distributes the board, not
+// the document. Integrity: a client-side sha256 of the exact payload,
+// plus the audit_log_root for on-chain verification.
+const b64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const unb64u=s=>Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")),c=>c.charCodeAt(0));
+async function gz(bytes,mode){
+  const cs=mode==="c"?new CompressionStream("gzip"):new DecompressionStream("gzip");
+  const out=new Response(new Blob([bytes]).stream().pipeThrough(cs));
+  return new Uint8Array(await out.arrayBuffer());
+}
+async function shareBoard(){
+  if(!lastResult)return;
+  const raw=new TextEncoder().encode(JSON.stringify(lastResult));
+  const packed=b64u(await gz(raw,"c"));
+  const url=`${location.origin}${location.pathname}#board=${packed}`;
+  const dig=await crypto.subtle.digest("SHA-256",raw);
+  const hex=[...new Uint8Array(dig)].map(x=>x.toString(16).padStart(2,"0")).join("");
+  try{await navigator.clipboard.writeText(url);}catch(e){}
+  const b=$("shareboard");
+  b.textContent=`COPIED · ${hex.slice(0,12)}`;
+  setTimeout(()=>{b.textContent="SHARE BOARD";},4000);
+}
+async function openSharedBoard(){
+  const m=location.hash.match(/#board=([A-Za-z0-9_-]+)/);
+  if(!m)return false;
+  try{
+    const raw=await gz(unb64u(m[1]),"d");
+    const r=JSON.parse(new TextDecoder().decode(raw));
+    const dig=await crypto.subtle.digest("SHA-256",raw);
+    const hex=[...new Uint8Array(dig)].map(x=>x.toString(16).padStart(2,"0")).join("");
+    lastResult=r;lastEvents=[];
+    render(r);
+    $("canvas").insertAdjacentHTML("afterbegin",
+      `<div class="banner" style="border-color:var(--info);color:var(--info);background:rgba(61,220,151,.05)">SHARED BOARD — rendered read-only from the link, nothing fetched from a server · link digest sha256:${hex.slice(0,16)}… · audit root ${esc((r.audit_log_root||"").slice(0,16))}… (verifiable on-chain where notarized)</div>`);
+    $("srcflag").textContent="SOURCE: SHARED LINK";
+    $("srcflag").style.color="var(--info)";
+  }catch(e){
+    $("canvas").innerHTML=`<div class="idle" style="border-color:var(--orange)"><div class="big" style="color:var(--orange)">BAD BOARD LINK</div><p>${esc(String(e))}</p></div>`;
+  }
+  return true;
+}
+addEventListener("DOMContentLoaded",()=>{openSharedBoard();});
+
 $("drop").onclick=()=>$("file").click();
 $("drop").ondragover=e=>e.preventDefault();
 $("drop").ondrop=e=>{e.preventDefault();if(e.dataTransfer.files[0])stage(e.dataTransfer.files[0]);};
@@ -212,7 +258,9 @@ $("exec").onclick=async()=>{
     }
   }catch(err){log("system","fail",String(err));}
   $("exec").disabled=false;
-  if(result)render(result);
+  if(result){lastResult=result;render(result);
+    $("shareboard").style.display="";
+    $("shareboard").onclick=shareBoard;}
 };
 // ── Renderer registry (cityos pattern): type -> (gate, render). A gate
 // checks SHAPE, not presence — malformed data degrades to a plain table
