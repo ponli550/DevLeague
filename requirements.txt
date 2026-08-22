@@ -1,0 +1,6 @@
+fastapi
+pdfplumber
+openpyxl
+python-dotenv
+httpx
+openai
