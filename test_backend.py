@@ -1099,6 +1099,19 @@ check("vercel function wrapper exists",
 check("vercel.json routes to the app",
       os.path.exists(os.path.join(os.path.dirname(__file__), "vercel.json")))
 
+
+# ── 37. mobile layout — spec BEFORE code ──────────────────────────────────
+
+print("\n=== 37. mobile ===")
+_hm = open(os.path.join(os.path.dirname(__file__), "web", "index.html")).read()
+_mob = _hm[_hm.index("@media (max-width:860px)"):]
+_mob = _mob[:_mob.index("}")+2]
+check("canvas is never hidden on phones", ".right{display:none}" not in _mob.replace(" ",""))
+check("phone layout stacks to one column",
+      "grid-template-columns:1fr" in _mob.replace(" ","") and "overflow:auto" in _mob.replace(" ",""))
+check("dashboard tiles collapse to a single column on phones",
+      ".dash{grid-template-columns:1fr" in _mob.replace(" ",""))
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
