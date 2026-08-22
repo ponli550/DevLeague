@@ -563,6 +563,32 @@ finally:
 check("client call carries an explicit timeout",
       "timeout" in _insp.getsource(backend._call_deepseek))
 
+
+# ── 23. golden XLSX fixture (#33) — written BEFORE the code ────────────────
+
+print("\n=== 23. golden XLSX ===")
+import hashlib as _hl
+check("make_sample exposes an xlsx generator",
+      hasattr(__import__("make_sample"), "build_xlsx"))
+if hasattr(__import__("make_sample"), "build_xlsx"):
+    import make_sample as _ms
+    _xp = os.path.join(tempfile.gettempdir(), "_golden_check.xlsx")
+    _ms.build_xlsx(_xp)
+    _sheets = backend.parse_xlsx(_xp)
+    _text = "\n".join(t for _, t in _sheets)
+    _sha = _hl.sha256(_text.encode()).hexdigest()
+    with open(os.path.join(os.path.dirname(__file__), "fixtures",
+                           "golden_xlsx.json")) as fh:
+        _g = json.load(fh)
+    check("parsed text matches the golden sha", _sha == _g["text_sha256"],
+          f"got {_sha[:16]}")
+    _clean, _n = backend.redact(_text)
+    check("golden redaction count matches", _n == _g["redaction_count"],
+          f"got {_n}")
+    check("xlsx carries the same planted discrepancy",
+          "2,750,000" in _text or "2750000" in _text)
+    os.remove(_xp)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
