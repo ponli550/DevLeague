@@ -1237,6 +1237,19 @@ check("failure says so instead of claiming success",
       "select and copy" in _blk.lower() or "copy it manually" in _blk.lower())
 check("a prompt textarea exists in the markup", 'id="promptbox"' in _h40)
 
+
+# ── 41. prepare feedback must be where the user is looking — spec first ────
+
+print("\n=== 41. prepare feedback visibility ===")
+_h41 = open(os.path.join(os.path.dirname(__file__), "web", "index.html")).read()
+_b41 = _h41[_h41.index('$("prep").onclick'):_h41.index('$("verifyjson").onclick')]
+check("an inline status line sits next to the button, not only in telemetry",
+      'id="prepout"' in _h41 and 'prepout' in _b41)
+check("the prompt box is scrolled into view when it appears",
+      "scrollIntoView" in _b41)
+check("the inline status persists (no self-erasing timeout on it)",
+      "prepout" in _b41 and _b41.count("setTimeout") <= 1)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
