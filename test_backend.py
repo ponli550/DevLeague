@@ -333,10 +333,11 @@ if os.path.exists("sample_report.pdf"):
 
 print("\n=== 16. DeepSeek provider ===")
 check("backend exposes _call_deepseek", hasattr(backend, "_call_deepseek"))
-check("gemini entrypoint is gone", not hasattr(backend, "_call_gemini"))
+check("gemini is a BYOK provider entrypoint", hasattr(backend, "_call_gemini"))
 check("default model is deepseek-chat", backend.MODEL == "deepseek-chat")
 _src = open(os.path.join(os.path.dirname(__file__), "backend.py")).read()
-check("no gemini references left in backend", "gemini" not in _src.lower())
+check("deepseek remains the env default",
+      '"deepseek"' in _src and "LLM_PROVIDER" in _src)
 _saved = {k: os.environ.pop(k, None)
           for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
 os.environ.pop("DEMO_FALLBACK", None)

@@ -29,7 +29,10 @@ def index():
 
 
 @app.post("/api/analyze")
-async def analyze(file: UploadFile, question: str = Form(...)):
+async def analyze(file: UploadFile, question: str = Form(...),
+                  provider: str = Form(""), api_key: str = Form("")):
+    # BYOK: provider + key ride this request only — never stored, never
+    # logged. Empty means the server's env defaults.
     suffix = os.path.splitext(file.filename or "")[1].lower() or ".pdf"
     fd, path = tempfile.mkstemp(prefix="finverify_", suffix=suffix)
     with os.fdopen(fd, "wb") as out:
@@ -37,7 +40,10 @@ async def analyze(file: UploadFile, question: str = Form(...)):
 
     def stream():
         try:
-            for event in backend.analyze_stream(path, question):
+            for event in backend.analyze_stream(
+                    path, question,
+                    provider=(provider or None),
+                    api_key=(api_key or None)):
                 yield json.dumps(event) + "\n"
         finally:
             # Retention = duration of the request. Nothing to purge later.
