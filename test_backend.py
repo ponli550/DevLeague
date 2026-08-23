@@ -1250,6 +1250,19 @@ check("the prompt box is scrolled into view when it appears",
 check("the inline status persists (no self-erasing timeout on it)",
       "prepout" in _b41 and _b41.count("setTimeout") <= 1)
 
+
+# ── 42. the page must never be served from a stale cache — spec first ──────
+
+print("\n=== 42. no stale page ===")
+import server as _sv42
+from fastapi.testclient import TestClient as _TC42
+_r42 = _TC42(_sv42.app).get("/")
+_cc42 = _r42.headers.get("cache-control", "")
+check("index is served no-store", "no-store" in _cc42, _cc42)
+check("no validators that let a browser reuse an old page",
+      "etag" not in {k.lower() for k in _r42.headers}
+      and "last-modified" not in {k.lower() for k in _r42.headers})
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
