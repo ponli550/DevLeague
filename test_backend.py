@@ -1263,6 +1263,39 @@ check("no validators that let a browser reuse an old page",
       "etag" not in {k.lower() for k in _r42.headers}
       and "last-modified" not in {k.lower() for k in _r42.headers})
 
+
+# ── 43. handlers must live in an executable script block — spec first ──────
+
+print("\n=== 43. no dead script blocks ===")
+import re as _re43
+_h43 = open(os.path.join(os.path.dirname(__file__), "web", "index.html")).read()
+_dead = []
+for _m in _re43.finditer(r'<script\b([^>]*)>(.*?)</script>', _h43, _re43.S):
+    if "src=" in _m.group(1) and _m.group(2).strip():
+        _dead.append(_m.group(2))
+check("no inline code inside a src= script tag (browsers ignore it)",
+      not _dead, (_dead[0][:60] if _dead else ""))
+for _hid in ("prep", "verifyjson", "exec"):
+    _ok = False
+    for _m in _re43.finditer(r'<script\b([^>]*)>(.*?)</script>', _h43, _re43.S):
+        if "src=" not in _m.group(1) and f'$("{_hid}").onclick' in _m.group(2):
+            _ok = True
+    check(f"{_hid} handler sits in an executed inline script", _ok)
+
+
+# ── 44. no duplicate top-level declarations in the page script ─────────────
+
+print("\n=== 44. script parses once ===")
+import re as _re44
+from collections import Counter as _C44
+_h44 = open(os.path.join(os.path.dirname(__file__), "web", "index.html")).read()
+_code44 = "\n".join(m.group(2) for m in _re44.finditer(
+    r'<script\b([^>]*)>(.*?)</script>', _h44, _re44.S) if "src=" not in m.group(1))
+_top44 = _re44.findall(r"^(?:let|const)\s+([A-Za-z_$][\w$]*)", _code44, _re44.M)
+_dup44 = sorted(n for n, c in _C44(_top44).items() if c > 1)
+check("no top-level let/const declared twice (kills the whole script)",
+      not _dup44, ",".join(_dup44[:6]))
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
