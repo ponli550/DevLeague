@@ -1161,6 +1161,68 @@ _sv38 = open(os.path.join(os.path.dirname(__file__), "server.py")).read()
 check("server threads provider+key per request and never logs the key",
       "api_key" in _sv38 and "provider" in _sv38)
 
+
+# ── 39. use-your-AI-app mode (prepare / paste-back / verify) — spec first ──
+
+print("\n=== 39. your-own-app mode ===")
+check("verify_external exists", hasattr(backend, "verify_external"))
+if hasattr(backend, "verify_external"):
+    # parity: the fixture pushed through verify_external must match analyze()
+    _ks39 = {k: os.environ.pop(k, None) for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+    os.environ["DEMO_FALLBACK"] = "1"
+    try:
+        _ref39 = backend.analyze("sample_report.pdf", "q")
+    finally:
+        os.environ.pop("DEMO_FALLBACK", None)
+        for k, v in _ks39.items():
+            if v is not None:
+                os.environ[k] = v
+    _pages39 = backend.parse_pdf("sample_report.pdf")
+    _red39 = [(l, backend.redact(t)[0]) for l, t in _pages39]
+    with open(os.path.join(os.path.dirname(__file__), "fixtures",
+                           "cached_response.json")) as fh:
+        _raw39 = json.load(fh)
+    _ext39 = backend.verify_external(_raw39, _red39)
+    check("parity: summary identical to the pipeline path",
+          _ext39["summary"] == _ref39["summary"],
+          f"{_ext39['summary']} vs {_ref39['summary']}")
+    check("parity: same citation pinning",
+          [f["verified_in_source"] for f in _ext39["facts"]]
+          == [f["verified_in_source"] for f in _ref39["facts"]])
+    check("provider is honestly labeled external",
+          _ext39["provider"] == "external")
+import server as _sv39
+from fastapi.testclient import TestClient as _TC39
+_c39 = _TC39(_sv39.app)
+with open("sample_report.pdf", "rb") as fh:
+    _r39 = _c39.post("/api/prepare",
+                     files={"file": ("s.pdf", fh, "application/pdf")},
+                     data={"question": "Does it add up?"})
+check("prepare returns the copyable prompt + prep id",
+      _r39.status_code == 200 and "prep_id" in _r39.json()
+      and "DOCUMENT:" in _r39.json()["prompt"]
+      and "Does it add up?" in _r39.json()["prompt"])
+check("the prepared prompt is redacted — no NRIC leaves",
+      "880512-14-5533" not in _r39.json()["prompt"])
+_pid39 = _r39.json()["prep_id"]
+with open(os.path.join(os.path.dirname(__file__), "fixtures",
+                       "cached_response.json")) as fh:
+    _fixtxt39 = fh.read()
+_v39 = _c39.post("/api/verify_json",
+                 json={"prep_id": _pid39, "llm_json": _fixtxt39})
+check("paste-back verifies and releases", _v39.status_code == 200
+      and _v39.json()["summary"]["checks_failed"] == 1)
+check("unknown prep id -> 404",
+      _c39.post("/api/verify_json",
+                json={"prep_id": "zz", "llm_json": "{}"}).status_code == 404)
+check("garbage json -> 400, named",
+      _c39.post("/api/verify_json",
+                json={"prep_id": _pid39, "llm_json": "not json{"}).status_code == 400)
+_h39 = open(os.path.join(os.path.dirname(__file__), "web", "index.html")).read()
+check("UI: prepare/copy-prompt/paste-back controls",
+      'id="prep"' in _h39 and 'id="pastejson"' in _h39
+      and "COPY PROMPT" in _h39 and "paste" in _h39.lower())
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
