@@ -1113,6 +1113,53 @@ check("phone layout stacks to one scrolling column",
 check("dashboard tiles collapse to a single column on phones",
       ".dash{grid-template-columns:1fr}" in _mob)
 
+
+# ── 38. BYOK multi-provider — spec BEFORE code ─────────────────────────────
+
+print("\n=== 38. BYOK providers ===")
+check("provider registry exists",
+      hasattr(backend, "PROVIDERS") and set(backend.PROVIDERS) >= {"deepseek", "gemini", "claude"})
+_src38 = open(os.path.join(os.path.dirname(__file__), "backend.py")).read()
+check("claude path uses the official anthropic SDK, never a compat shim",
+      "import anthropic" in _src38
+      and "api.anthropic.com/v1/" not in _src38
+      and "claude-opus-5" in _src38)
+check("gemini path uses Google's official OpenAI-compatible endpoint",
+      "generativelanguage.googleapis.com/v1beta/openai" in _src38)
+# key threading: each provider callable receives the per-request key
+_seen38 = {}
+_orig38 = dict(backend.PROVIDERS)
+try:
+    for name in ("deepseek", "gemini", "claude"):
+        backend.PROVIDERS[name] = (lambda n: (lambda pages, q, key: (_seen38.__setitem__(n, key), {"answer": "x"})[1]))(name)
+    out, cached = backend.ask_llm([("Page 1", "t")], "q", provider="gemini", api_key="user-key-123")
+    check("per-request key reaches the provider", _seen38.get("gemini") == "user-key-123" and cached is False)
+    try:
+        backend.ask_llm([("Page 1", "t")], "q", provider="grok", api_key="k")
+        check("unknown provider fails loudly", False)
+    except Exception as e:
+        check("unknown provider fails loudly", "grok" in str(e))
+finally:
+    backend.PROVIDERS.update(_orig38)
+# stream + result must surface which provider answered
+_ks38 = {k: os.environ.pop(k, None) for k in ("DEEPSEEK_API_KEY", "deepseek_api")}
+os.environ["DEMO_FALLBACK"] = "1"
+try:
+    _o38 = backend.analyze("sample_report.pdf", "q")
+    check("result names the provider", _o38.get("provider") == "deepseek")
+finally:
+    os.environ.pop("DEMO_FALLBACK", None)
+    for k, v in _ks38.items():
+        if v is not None:
+            os.environ[k] = v
+_h38 = open(os.path.join(os.path.dirname(__file__), "web", "index.html")).read()
+check("UI: provider select + key field, honesty note",
+      'id="prov"' in _h38 and 'id="userkey"' in _h38
+      and "never stored" in _h38)
+_sv38 = open(os.path.join(os.path.dirname(__file__), "server.py")).read()
+check("server threads provider+key per request and never logs the key",
+      "api_key" in _sv38 and "provider" in _sv38)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
