@@ -1263,6 +1263,25 @@ check("no validators that let a browser reuse an old page",
       "etag" not in {k.lower() for k in _r42.headers}
       and "last-modified" not in {k.lower() for k in _r42.headers})
 
+
+# ── 43. handlers must live in an executable script block — spec first ──────
+
+print("\n=== 43. no dead script blocks ===")
+import re as _re43
+_h43 = open(os.path.join(os.path.dirname(__file__), "web", "index.html")).read()
+_dead = []
+for _m in _re43.finditer(r'<script\b([^>]*)>(.*?)</script>', _h43, _re43.S):
+    if "src=" in _m.group(1) and _m.group(2).strip():
+        _dead.append(_m.group(2))
+check("no inline code inside a src= script tag (browsers ignore it)",
+      not _dead, (_dead[0][:60] if _dead else ""))
+for _hid in ("prep", "verifyjson", "exec"):
+    _ok = False
+    for _m in _re43.finditer(r'<script\b([^>]*)>(.*?)</script>', _h43, _re43.S):
+        if "src=" not in _m.group(1) and f'$("{_hid}").onclick' in _m.group(2):
+            _ok = True
+    check(f"{_hid} handler sits in an executed inline script", _ok)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
