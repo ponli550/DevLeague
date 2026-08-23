@@ -1282,6 +1282,20 @@ for _hid in ("prep", "verifyjson", "exec"):
             _ok = True
     check(f"{_hid} handler sits in an executed inline script", _ok)
 
+
+# ── 44. no duplicate top-level declarations in the page script ─────────────
+
+print("\n=== 44. script parses once ===")
+import re as _re44
+from collections import Counter as _C44
+_h44 = open(os.path.join(os.path.dirname(__file__), "web", "index.html")).read()
+_code44 = "\n".join(m.group(2) for m in _re44.finditer(
+    r'<script\b([^>]*)>(.*?)</script>', _h44, _re44.S) if "src=" not in m.group(1))
+_top44 = _re44.findall(r"^(?:let|const)\s+([A-Za-z_$][\w$]*)", _code44, _re44.M)
+_dup44 = sorted(n for n, c in _C44(_top44).items() if c > 1)
+check("no top-level let/const declared twice (kills the whole script)",
+      not _dup44, ",".join(_dup44[:6]))
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
