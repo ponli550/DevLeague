@@ -1223,6 +1223,20 @@ check("UI: prepare/copy-prompt/paste-back controls",
       'id="prep"' in _h39 and 'id="pastejson"' in _h39
       and "COPY PROMPT" in _h39 and "paste" in _h39.lower())
 
+
+# ── 40. prepare must never claim a copy it didn't make — spec BEFORE code ──
+
+print("\n=== 40. prepare copy honesty ===")
+_h40 = open(os.path.join(os.path.dirname(__file__), "web", "index.html")).read()
+_blk = _h40[_h40.index('$("prep").onclick'):_h40.index('$("verifyjson").onclick')]
+check("the prompt is always shown for manual copy, clipboard or not",
+      "promptbox" in _blk and "select()" in _blk)
+check("clipboard success is verified, not assumed",
+      "copied=true" in _blk.replace(" ", "") or "copied = true" in _blk)
+check("failure says so instead of claiming success",
+      "select and copy" in _blk.lower() or "copy it manually" in _blk.lower())
+check("a prompt textarea exists in the markup", 'id="promptbox"' in _h40)
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
