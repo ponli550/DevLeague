@@ -93,11 +93,67 @@ EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 MY_IC_RE = re.compile(r"\b\d{6}-\d{2}-\d{4}\b")
 PHONE_RE = re.compile(r"\b(?:\+?60|0)1\d[-\s]?\d{3,4}[-\s]?\d{4}\b")
 
-# NOTE: no bare 12-digit rule on purpose. Malaysian company registration
-# numbers under the Companies Act 2016 are 12 digits (YYYYNNNNNNNN) and
-# sit on the cover of every set of financial statements — redacting them
-# destroys the identity of the entity being audited, and they are not
-# personal data.
+# Two redaction profiles, chosen by the caller (see redact(profile=...)):
+#
+#   "company"  — the default, and the behaviour this tool was built for:
+#                auditing a COMPANY's financial report. Deliberately has
+#                NO bare-12-digit rule. Malaysian company registration
+#                numbers under the Companies Act 2016 are 12 digits
+#                (YYYYNNNNNNNN) and sit on the cover of every set of
+#                financial statements — redacting them destroys the
+#                identity of the entity being audited, and they are not
+#                personal data. This profile is frozen: its output must be
+#                byte-identical to what redact() produced before profiles
+#                existed (test_backend.py section 45 enforces it).
+#
+#   "personal" — a PERSONAL bank statement, where the threat model
+#                inverts: a bare 12-digit run IS the customer's account
+#                number. Superset of "company", adding [CARD], [ACCOUNT]
+#                and [ADDRESS] below.
+#
+# The 12-digit rule is therefore profile-dependent by design, not an
+# oversight: the same digit run is the entity's identity on one document
+# and the customer's account number on the other. Only the caller knows
+# which document it is holding, so we make it say — an unknown profile
+# is rejected rather than guessed.
+REDACTION_PROFILES = ("company", "personal")
+
+# Personal-profile rules. Digit runs are bounded by (?<!\d)/(?!\d) so a
+# 17+ digit run is left whole rather than part-redacted, and amounts are
+# safe by construction: on a statement an amount always carries a decimal
+# point and/or thousands commas, so no amount ever yields a run of >= 10
+# contiguous digits (1,234,567.89 is runs of 1, 3, 3, 2).
+#
+# [CARD] is a distinct marker from [ACCOUNT], not folded into it: PAN
+# lengths are 14 (Diners), 15 (Amex) and 16 (Visa/Mastercard), and a
+# statement line that names a card ("... payment to card 4xxx") reads very
+# differently to the model from the account header. CARD_RE runs BEFORE
+# ACCOUNT_RE so a 14-16 digit run is labelled as a card; ACCOUNT_RE then
+# only ever sees 10-13 digit runs. Known cost: a few Malaysian banks issue
+# 14-digit account numbers, which land as [CARD] — still redacted, only
+# the label is off, and that is the safe direction.
+CARD_RE = re.compile(r"(?<!\d)\d{14,16}(?!\d)")
+ACCOUNT_RE = re.compile(r"(?<!\d)\d{10,16}(?!\d)")
+
+# [ADDRESS]: a comma-separated segment holding a 5-digit Malaysian
+# postcode and a state name or MYS/MALAYSIA. The match reaches back over
+# up to three preceding comma-tokens (house number / street / taman —
+# the parts that actually identify a home), each at most one line, and
+# runs forward through the state token and, if it follows, the country
+# token. A 5-digit number with no state after it is not an address.
+_MY_STATES = (
+    r"JOHOR|SELANGOR|KUALA\s+LUMPUR|PENANG|PULAU\s+PINANG|PERAK|KEDAH|MELAKA|"
+    r"NEGERI\s+SEMBILAN|PAHANG|TERENGGANU|KELANTAN|SABAH|SARAWAK|PERLIS|"
+    r"LABUAN|PUTRAJAYA|MYS|MALAYSIA"
+)
+ADDRESS_RE = re.compile(
+    r"(?:[^,\n]{1,60},[ \t]*\n?[ \t]*){0,3}"     # street / area tokens before
+    r"[^,\n]*?(?<!\d)\d{5}(?!\d)"                 # the postcode token
+    r"(?:[^,\n]*?,[ \t]*\n?[ \t]*){0,3}?[^,\n]*?"  # up to 3 tokens to the state
+    rf"\b(?:{_MY_STATES})\b"
+    r"(?:,[ \t]*(?:MYS|MALAYSIA)\b)?",             # trailing country token
+    re.IGNORECASE,
+)
 
 # Name detection, layered (regex alone cannot catch names — say this
 # limitation out loud in the pitch; it reads as honest, not weak):
@@ -147,8 +203,17 @@ def _valid_ic_date(match: re.Match) -> bool:
     return 1 <= month <= 12 and 1 <= day <= 31
 
 
-def redact(text: str, extra_names: list[str] | None = None) -> tuple[str, int]:
-    """Scrub PII. Returns (clean_text, items_redacted)."""
+def redact(text: str, extra_names: list[str] | None = None,
+           profile: str = "company") -> tuple[str, int]:
+    """Scrub PII. Returns (clean_text, items_redacted).
+
+    profile: "company" (default, frozen) or "personal" (superset — adds
+    [CARD], [ACCOUNT], [ADDRESS]). See the profile note above. Anything
+    else raises ValueError: the caller must say what it is holding."""
+    if profile not in REDACTION_PROFILES:
+        raise ValueError(
+            f"unknown redaction profile {profile!r}; valid profiles: "
+            + ", ".join(REDACTION_PROFILES))
     count = 0
 
     for name in [*KNOWN_NAMES, *(extra_names or [])]:
@@ -181,6 +246,18 @@ def redact(text: str, extra_names: list[str] | None = None) -> tuple[str, int]:
     ):
         text, n = pattern.subn(token, text)
         count += n
+
+    if profile == "personal":
+        # Order matters: address first (its postcode is 5 digits and its
+        # tokens may hold a phone-like run already masked above), then
+        # cards before accounts so 14-16 digit runs keep the card label.
+        for pattern, token in (
+            (ADDRESS_RE, "[ADDRESS]"),
+            (CARD_RE, "[CARD]"),
+            (ACCOUNT_RE, "[ACCOUNT]"),
+        ):
+            text, n = pattern.subn(token, text)
+            count += n
     return text, count
 
 
