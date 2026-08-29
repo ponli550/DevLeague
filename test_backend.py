@@ -8,6 +8,7 @@ fallback engages; it never makes a real network call either.
 
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -1457,6 +1458,53 @@ with open("sample_report.pdf", "rb") as fh:
 check("prepare with unknown profile -> 400 listing valid profiles",
       _rx45.status_code == 400 and "company" in _rx45.text
       and "personal" in _rx45.text, f"{_rx45.status_code} {_rx45.text[:80]}")
+
+# 45j. account-holder name is read from the page-1 header block (issue #69)
+# A lone given name in a DuitNow recipient field carries none of the name
+# signals (honorific, patronymic, cue, metadata). The personal profile
+# already redacts the holder's address block; the name sits on the line
+# above it, so the redactor takes its tokens from there — the statement's
+# own header, never a guess from capitalisation.
+_stmt45 = (
+    "Malayan Banking Berhad (3813-K)\n"
+    "14th Floor, Menara Maybank, 100 Jalan Tun Perak, 50050 Kuala Lumpur, Malaysia\n"
+    "MR / ENCIK FARIS HAKIMI BIN ZULKARNAIN STATEMENT DATE : 31/07/26\n"
+    "17 JALAN CEMPAKA 4, TAMAN SERI, 43000 KAJANG, SELANGOR, MYS\n"
+    "ACCOUNT NO : 512345678901\n"
+    "01/07 DUITNOW TRANSFER TO FARIS 250.00 1,047.00\n"
+    "02/07 GRAB* 6812 KUALA LUMPUR MYS 18.50 1,028.50\n"
+    "03/07 SHOPEE MOBILE MALAYSIA SDN BHD 61.00 967.50\n"
+    "04/07 TIKTOK SHOP 12.00 955.50\n"
+)
+_h45, _ = _redact45(_stmt45, profile="personal")
+_amt45 = re.compile(r"\b\d{1,3}(?:,\d{3})*\.\d{2}\b")
+check("holder given name in a bare transaction line -> redacted under personal",
+      "FARIS" not in _h45, _h45)
+check("holder surname tokens redacted wherever they appear under personal",
+      "HAKIMI" not in _h45 and "ZULKARNAIN" not in _h45, _h45)
+check("holder address block still -> [ADDRESS]",
+      "[ADDRESS]" in _h45 and "43000" not in _h45, _h45)
+check("merchant names survive — no capitalisation guessing",
+      all(w in _h45 for w in ("GRAB*", "SHOPEE MOBILE MALAYSIA", "TIKTOK SHOP")),
+      _h45)
+check("bank's own name is not taken as the holder",
+      "Malayan Banking Berhad" in _h45, _h45)
+check("amount-shaped token count unchanged before/after",
+      len(_amt45.findall(_stmt45)) == len(_amt45.findall(_h45)),
+      f"{len(_amt45.findall(_stmt45))} -> {len(_amt45.findall(_h45))}")
+check("company (frozen) leaves the bare given name alone",
+      "TRANSFER TO FARIS" in _redact45(_stmt45, profile="company")[0])
+# Deterministic, and short/state/digit tokens are never names
+check("same input, same output (deterministic)",
+      _redact45(_stmt45, profile="personal") == _redact45(_stmt45, profile="personal"))
+_hn45 = getattr(backend, "header_names", lambda t: [])(_stmt45)
+check("header_names yields only the holder's tokens (>=3 chars, no state/MYS/digits)",
+      sorted(_hn45) == ["FARIS", "HAKIMI", "ZULKARNAIN"], _hn45)
+_lo45 = ("AB CDE LIM\nLot 7, Jalan Ampang, 50450 Kuala Lumpur, Malaysia\n"
+         "01/07 TRANSFER TO LIM 5.00\n01/07 AB CDE 6.00\n")
+_lr45, _ = _redact45(_lo45, profile="personal")
+check("2-char header token is not a name (AB survives), 3-char is",
+      "AB" in _lr45 and " LIM " not in _lr45 and "TO LIM" not in _lr45, _lr45)
 
 # ── Summary ───────────────────────────────────────────────────────────────
 
