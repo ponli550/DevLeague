@@ -1358,11 +1358,26 @@ for _len45 in (14, 15, 16):
     _c45, _ = _redact45(f"Card {_digits45} paid", profile="personal")
     check(f"{_len45}-digit run -> [CARD] under personal (not [ACCOUNT])",
           _c45 == "Card [CARD] paid", _c45)
-check("17-digit run is neither card nor account (left alone, not part-redacted)",
-      _redact45("Ref 41111111111111111 x", profile="personal")[0]
+check("17-digit run left whole under company (neither card nor account)",
+      _redact45("Ref 41111111111111111 x", profile="company")[0]
       == "Ref 41111111111111111 x")
 check("16-digit run untouched under company",
       "4111111111111111" in _redact45("Card 4111111111111111", profile="company")[0])
+
+# 45d-ii. [REF]: 17+ digit runs are payment references on a personal
+# statement — a unique trace of one real transaction (issue #70). Redacted
+# under personal, whole (not part-eaten by the 10-16 window) under company.
+for _len45 in (17, 19, 23):
+    _digits45 = "2" + "0" * (_len45 - 1)
+    _r45d, _n45d = _redact45(f"Pay {_digits45} TIKTOK 12.90", profile="personal")
+    check(f"{_len45}-digit run -> [REF] under personal, counted",
+          _r45d == "Pay [REF] TIKTOK 12.90" and _n45d == 1, _r45d)
+    check(f"{_len45}-digit run left whole under company",
+          _redact45(f"Pay {_digits45} TIKTOK", profile="company")[0]
+          == f"Pay {_digits45} TIKTOK")
+check("[REF] before [CARD]/[ACCOUNT]: 19-digit run is not part-redacted",
+      "[CARD]" not in _redact45("Ref 2026072700341802279 x", profile="personal")[0]
+      and "[ACCOUNT]" not in _redact45("Ref 2026072700341802279 x", profile="personal")[0])
 
 # 45e. amounts survive under personal — every form a statement prints
 _amts45 = "Bal 1,047.00 Dr 47.00 Fee 0.51 Adj (50.00) Big 1,234,567.89 Int 12.345"
