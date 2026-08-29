@@ -199,6 +199,70 @@ PATRONYMIC_RE = re.compile(
 )
 
 
+# Account-holder name from the statement header (personal profile only,
+# issue #69). A bare given name in a DuitNow/transfer description carries
+# none of the layered name signals above. But a personal statement prints
+# the holder's name on the line directly above the address block that
+# [ADDRESS] redacts — so the tokens are READ from that header line, never
+# guessed from capitalisation (which would eat TIKTOK / SHOPEE / GRAB).
+#
+# The name line is the honorific/patronymic match on one of the two lines
+# above an [ADDRESS] hit. Failing that, a line of plain alphabetic words is
+# accepted only if it carries no digits, punctuation or corporate words —
+# the bank's own letterhead ("Malayan Banking Berhad (3813-K)") sits above
+# the bank's address and must not become the holder.
+# Stopwords: patronymics, states/country, and the statement-layout labels
+# that share the header line with the name on a two-column statement
+# ("... BIN ZULKARNAIN   STATEMENT DATE : 31/07/26").
+_NAME_STOPWORDS = frozenset(
+    ["BIN", "BINTI", "MYS", "MALAYSIA", "SRI", "SERI",
+     "STATEMENT", "DATE", "TARIKH", "PENYATA", "PAGE", "MUKA", "ACCOUNT",
+     "AKAUN", "NOMBOR", "NUMBER"]
+    + [w for st in _MY_STATES.replace(r"\s+", " ").split("|") for w in st.split()]
+)
+_HEADER_STRIP_RE = re.compile(
+    r"\b(?:Mr|Ms|Mrs|Dr|Ir|Tun|Tan|Puan|Toh|Datuk|Dato'?|Datin|Encik|Cik|"
+    r"Tuan|Haji|Hajah|a/l|a/p)\b\.?", re.IGNORECASE)
+_CORPORATE_RE = re.compile(
+    r"\b(?:BANK|BANKING|BERHAD|BHD|SDN|PLC|LTD|LIMITED|MENARA|JALAN|LOT|NO)\b",
+    re.IGNORECASE)
+_PLAIN_NAME_LINE_RE = re.compile(r"^[A-Za-z' ]+$")
+
+
+def _name_tokens(line: str) -> list[str]:
+    toks = []
+    for w in _HEADER_STRIP_RE.sub(" ", line).replace("'", "").split():
+        if len(w) < 3 or not w.isalpha() or w.upper() in _NAME_STOPWORDS:
+            continue
+        if w.upper() not in toks:
+            toks.append(w.upper())
+    return toks
+
+
+def header_names(text: str) -> list[str]:
+    """Name tokens of the account holder, read from the line(s) directly
+    above each address block on the page. Deterministic; [] when the
+    page has no address block or no recognisable name line above one."""
+    names: list[str] = []
+    lines = text.split("\n")
+    for m in ADDRESS_RE.finditer(text):
+        first_line = text.count("\n", 0, m.start())
+        for ln in lines[max(0, first_line - 2):first_line][::-1]:
+            hit = HONORIFIC_RE.search(ln) or PATRONYMIC_RE.search(ln)
+            if hit:
+                cand = hit.group(0)
+            elif (_PLAIN_NAME_LINE_RE.match(ln.strip())
+                  and not _CORPORATE_RE.search(ln)):
+                cand = ln
+            else:
+                continue
+            for tok in _name_tokens(cand):
+                if tok not in names:
+                    names.append(tok)
+            break
+    return names
+
+
 def _valid_ic_date(match: re.Match) -> bool:
     """First six NRIC digits must be a plausible YYMMDD — this is what
     keeps invoice/reference numbers shaped like 123456-78-9012 from
@@ -209,17 +273,36 @@ def _valid_ic_date(match: re.Match) -> bool:
 
 
 def redact(text: str, extra_names: list[str] | None = None,
-           profile: str = "company") -> tuple[str, int]:
+           profile: str = "company",
+           holder_names: list[str] | None = None) -> tuple[str, int]:
     """Scrub PII. Returns (clean_text, items_redacted).
 
     profile: "company" (default, frozen) or "personal" (superset — adds
-    [CARD], [ACCOUNT], [ADDRESS], [REF]). See the profile note above. Anything
-    else raises ValueError: the caller must say what it is holding."""
+    [CARD], [ACCOUNT], [ADDRESS], [REF], and scrubs the account holder's
+    name tokens read from the header block, see header_names()). See the
+    profile note above. Anything else raises ValueError: the caller must
+    say what it is holding.
+
+    holder_names: personal only — header tokens found on an earlier page
+    (the header is on page 1; the transactions run on) so they carry
+    across the document. Matched as whole words, ignoring case."""
     if profile not in REDACTION_PROFILES:
         raise ValueError(
             f"unknown redaction profile {profile!r}; valid profiles: "
             + ", ".join(REDACTION_PROFILES))
     count = 0
+
+    if profile == "personal":
+        # Read the header BEFORE any layer rewrites it, then scrub the
+        # tokens as whole words so ALI never fires inside MALAYSIA.
+        seen: list[str] = []
+        for tok in [*(holder_names or []), *header_names(text)]:
+            if tok.upper() not in seen:
+                seen.append(tok.upper())
+        for tok in seen:
+            text, n = re.subn(rf"\b{re.escape(tok)}\b", "[NAME_REDACTED]",
+                              text, flags=re.IGNORECASE)
+            count += n
 
     for name in [*KNOWN_NAMES, *(extra_names or [])]:
         text, n = re.subn(re.escape(name), "[NAME_REDACTED]", text, flags=re.IGNORECASE)

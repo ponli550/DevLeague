@@ -66,9 +66,17 @@ async def prepare(file: UploadFile, question: str = Form(...),
             return Response("no text found in the document", status_code=400)
         extra = (backend.pdf_metadata_names(path)
                  if path.lower().endswith(".pdf") else [])
+        # Personal: the holder's name tokens live in the page-1 header
+        # block; collect them before redacting so they carry to every page.
+        holder: list[str] = []
+        if profile == "personal":
+            for _, text in pages:
+                holder += [t for t in backend.header_names(text)
+                           if t not in holder]
         redacted, total = [], 0
         for label, text in pages:
-            clean, n = backend.redact(text, extra, profile=profile)
+            clean, n = backend.redact(text, extra, profile=profile,
+                                      holder_names=holder or None)
             redacted.append((label, clean))
             total += n
     except Exception as e:
