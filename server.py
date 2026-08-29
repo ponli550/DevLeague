@@ -42,11 +42,20 @@ _prepared: dict = {}
 
 
 @app.post("/api/prepare")
-async def prepare(file: UploadFile, question: str = Form(...)):
+async def prepare(file: UploadFile, question: str = Form(...),
+                  profile: str = Form("company")):
     """Use-your-AI-app mode, step 1: parse + redact ONLY — no model call.
     Returns the copyable prompt; the redacted pages are held in-process
-    (ephemeral, LRU 20) so the paste-back step can pin citations."""
+    (ephemeral, LRU 20) so the paste-back step can pin citations.
+
+    `profile` picks the redaction profile ("company" default, "personal"
+    for bank statements — see backend.REDACTION_PROFILES) and is echoed
+    back so the caller can confirm what was applied."""
     import hashlib
+    if profile not in backend.REDACTION_PROFILES:
+        return Response(
+            f"unknown profile {profile!r}; valid profiles: "
+            + ", ".join(backend.REDACTION_PROFILES), status_code=400)
     suffix = os.path.splitext(file.filename or "")[1].lower() or ".pdf"
     fd, path = tempfile.mkstemp(prefix="finverify_", suffix=suffix)
     with os.fdopen(fd, "wb") as out:
@@ -59,7 +68,7 @@ async def prepare(file: UploadFile, question: str = Form(...)):
                  if path.lower().endswith(".pdf") else [])
         redacted, total = [], 0
         for label, text in pages:
-            clean, n = backend.redact(text, extra)
+            clean, n = backend.redact(text, extra, profile=profile)
             redacted.append((label, clean))
             total += n
     except Exception as e:
@@ -74,7 +83,8 @@ async def prepare(file: UploadFile, question: str = Form(...)):
     _prepared[prep_id] = redacted
     while len(_prepared) > 20:
         _prepared.pop(next(iter(_prepared)))
-    return {"prep_id": prep_id, "prompt": prompt, "redaction_count": total}
+    return {"prep_id": prep_id, "prompt": prompt, "redaction_count": total,
+            "profile": profile}
 
 
 @app.post("/api/verify_json")

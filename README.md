@@ -58,7 +58,7 @@ uv run python server.py         # http://127.0.0.1:7861
 | Model never does the math | `grep -F "eval(" backend.py` → nothing; 3 fixed ops only |
 | No self-graded checks | expected values resolve from **cited** facts (`against_fact_id`) |
 | Quotes are real | every operand string-matched into the source |
-| PII never reaches the model | NRIC (date-validated), emails, phones, names, PDF author — masked first, counts measured |
+| PII never reaches the model | NRIC (date-validated), emails, phones, names, PDF author — masked first, counts measured; two profiles: `company` (default, keeps the 12-digit company reg no.) and `personal` (bank statements: adds account, card, address) |
 | Telemetry can't be doctored | every event hash-chained + HMAC-signed; root in the release |
 | Charts can't lie | model picks the form, only verified facts supply data; unknown kinds degrade to the table |
 | Boards share like Power BI | whole dashboard rides the URL **fragment** — no server, no storage 📤 |
