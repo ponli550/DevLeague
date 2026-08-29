@@ -1296,6 +1296,153 @@ _dup44 = sorted(n for n, c in _C44(_top44).items() if c > 1)
 check("no top-level let/const declared twice (kills the whole script)",
       not _dup44, ",".join(_dup44[:6]))
 
+# ── 45. redaction profiles: company (frozen) vs personal — spec BEFORE code ─
+
+print("\n=== 45. redaction profiles ===")
+# The company profile exists to audit company financial reports, where a
+# bare 12-digit run is a Companies Act registration number (entity identity,
+# not PII). A personal bank statement inverts that: a 12-digit run IS the
+# customer's account number. The caller must be able to say which document
+# it is holding, and the default must stay byte-for-byte what it is today.
+
+
+def _redact45(text, **kw):
+    # A missing `profile=` kwarg is a TypeError, not a wrong answer; report
+    # it as a FAIL row rather than aborting the whole suite.
+    try:
+        return backend.redact(text, **kw)
+    except TypeError as e:
+        return f"<<TypeError: {e}>>", -1
+
+
+# 45a. the default cannot drift: explicit "company" == implicit default
+_fixtures45 = [
+    sample,
+    "Approved by Siti Nurhaliza Binti Hassan on 12 May",
+    "Signed for the board: MOHD RAZAK BIN OSMAN, Director",
+    "Datuk Seri Wan Azizah attended the meeting",
+    "Ramasamy A/L Muniandy holds 40,000 shares",
+    "Company No. 202001012345 (12 digits)",
+    "Ref: 991331-14-5533 is an invoice, not an IC",
+    "IC: 880512-14-5533",
+    "Account 1234567890123456 at 81300 SKUDAI, JOHOR, MYS",
+] + [text for _, text in backend.parse_pdf("sample_report.pdf")]
+check("company profile is byte-identical with and without the explicit arg",
+      all(backend.redact(t) == _redact45(t, profile="company")
+          for t in _fixtures45))
+
+# 45b. 12-digit run: entity identity under company, account number under personal
+_t45 = "Company No. 202001012345 (12 digits)"
+check("12-digit run NOT redacted under company",
+      "202001012345" in _redact45(_t45, profile="company")[0])
+_p45, _n45 = _redact45(_t45, profile="personal")
+check("12-digit run -> [ACCOUNT] under personal",
+      "202001012345" not in _p45 and "[ACCOUNT]" in _p45 and _n45 >= 1, _p45)
+
+# 45c. [ACCOUNT] boundary: 9 digits is never an account, 10 is
+check("9-digit run untouched under company",
+      "123456789" in _redact45("Ref 123456789 ok", profile="company")[0])
+check("9-digit run untouched under personal",
+      "123456789" in _redact45("Ref 123456789 ok", profile="personal")[0])
+check("10-digit run -> [ACCOUNT] under personal",
+      _redact45("Acct 7123456789 ok", profile="personal")[0] == "Acct [ACCOUNT] ok",
+      _redact45("Acct 7123456789 ok", profile="personal")[0])
+check("13-digit run -> [ACCOUNT] under personal",
+      "[ACCOUNT]" in _redact45("Acct 7123456789012 ok", profile="personal")[0])
+check("10-digit run untouched under company",
+      "7123456789" in _redact45("Acct 7123456789 ok", profile="company")[0])
+
+# 45d. [CARD]: 14-16 digit runs are labelled as cards, not accounts
+for _len45 in (14, 15, 16):
+    _digits45 = "4" + "1" * (_len45 - 1)
+    _c45, _ = _redact45(f"Card {_digits45} paid", profile="personal")
+    check(f"{_len45}-digit run -> [CARD] under personal (not [ACCOUNT])",
+          _c45 == "Card [CARD] paid", _c45)
+check("17-digit run is neither card nor account (left alone, not part-redacted)",
+      _redact45("Ref 41111111111111111 x", profile="personal")[0]
+      == "Ref 41111111111111111 x")
+check("16-digit run untouched under company",
+      "4111111111111111" in _redact45("Card 4111111111111111", profile="company")[0])
+
+# 45e. amounts survive under personal — every form a statement prints
+_amts45 = "Bal 1,047.00 Dr 47.00 Fee 0.51 Adj (50.00) Big 1,234,567.89 Int 12.345"
+_a45, _ = _redact45(_amts45, profile="personal")
+check("amounts survive under personal (commas, decimals, parens)",
+      _a45 == _amts45, _a45)
+check("date-stamps and short refs survive under personal",
+      _redact45("31/07/2026 20260731 REF 987654", profile="personal")[0]
+      == "31/07/2026 20260731 REF 987654")
+
+# 45f. [ADDRESS]: postcode + state (or MYS/MALAYSIA), comma-separated
+_addr45 = ("IRFAN\nNO 12 JALAN BUNGA 3, TAMAN MELATI, 81300 SKUDAI, JOHOR, MYS\n"
+           "Statement date 31/07/2026")
+_r45, _ = _redact45(_addr45, profile="personal")
+check("address -> [ADDRESS] under personal (postcode + state gone)",
+      "81300" not in _r45 and "JOHOR" not in _r45 and "[ADDRESS]" in _r45, _r45)
+check("address redaction stops at the country token — the next line survives",
+      "Statement date 31/07/2026" in _r45, _r45)
+check("address redaction reaches back to the street line",
+      "JALAN BUNGA" not in _r45, _r45)
+_r45b, _ = _redact45("Lot 7, Jalan Ampang, 50450 Kuala Lumpur, Malaysia",
+                     profile="personal")
+check("mixed-case two-word state + MALAYSIA -> [ADDRESS]",
+      "50450" not in _r45b and "Kuala Lumpur" not in _r45b and "[ADDRESS]" in _r45b,
+      _r45b)
+_r45c, _ = _redact45("Taman Desa, 58100 Kuala Lumpur", profile="personal")
+check("postcode + state with no country token -> [ADDRESS]",
+      "58100" not in _r45c and "[ADDRESS]" in _r45c, _r45c)
+check("a 5-digit number without a state is NOT an address",
+      _redact45("Cheque 12345, cleared", profile="personal")[0]
+      == "Cheque 12345, cleared")
+check("address untouched under company",
+      "81300 SKUDAI, JOHOR" in _redact45(_addr45, profile="company")[0])
+
+# 45g. personal is a superset — every company rule still fires
+_sup45, _ = _redact45(sample, profile="personal")
+check("personal still scrubs names, NRIC, emails, phones",
+      "Ahmad Bin Ali" not in _sup45 and "880512-14-5533" not in _sup45
+      and "ahmad.ali@nusantara.com.my" not in _sup45
+      and "012-3456789" not in _sup45)
+check("personal honours extra_names too",
+      "Zulkifli" not in _redact45("Zulkifli owes RM 5.00",
+                                  extra_names=["Zulkifli"], profile="personal")[0])
+
+# 45h. unknown profile is rejected, naming the valid ones
+try:
+    backend.redact("x", profile="corporate")
+    check("unknown profile -> ValueError naming valid profiles", False, "no raise")
+except ValueError as e:
+    check("unknown profile -> ValueError naming valid profiles",
+          "company" in str(e) and "personal" in str(e), str(e))
+except TypeError as e:
+    check("unknown profile -> ValueError naming valid profiles", False, str(e))
+
+# 45i. /api/prepare accepts and echoes the profile; default is company
+import server as _sv45
+from fastapi.testclient import TestClient as _TC45
+_c45 = _TC45(_sv45.app)
+with open("sample_report.pdf", "rb") as fh:
+    _rd45 = _c45.post("/api/prepare",
+                      files={"file": ("s.pdf", fh, "application/pdf")},
+                      data={"question": "q"})
+check("prepare without profile echoes profile=company",
+      _rd45.status_code == 200 and _rd45.json().get("profile") == "company",
+      _rd45.text[:120])
+with open("sample_report.pdf", "rb") as fh:
+    _rp45 = _c45.post("/api/prepare",
+                      files={"file": ("s.pdf", fh, "application/pdf")},
+                      data={"question": "q", "profile": "personal"})
+check("prepare with profile=personal echoes it",
+      _rp45.status_code == 200 and _rp45.json().get("profile") == "personal",
+      _rp45.text[:120])
+with open("sample_report.pdf", "rb") as fh:
+    _rx45 = _c45.post("/api/prepare",
+                      files={"file": ("s.pdf", fh, "application/pdf")},
+                      data={"question": "q", "profile": "corporate"})
+check("prepare with unknown profile -> 400 listing valid profiles",
+      _rx45.status_code == 400 and "company" in _rx45.text
+      and "personal" in _rx45.text, f"{_rx45.status_code} {_rx45.text[:80]}")
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
