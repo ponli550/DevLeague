@@ -119,7 +119,7 @@ PHONE_RE = re.compile(r"\b(?:\+?60|0)1\d[-\s]?\d{3,4}[-\s]?\d{4}\b")
 REDACTION_PROFILES = ("company", "personal")
 
 # Personal-profile rules. Digit runs are bounded by (?<!\d)/(?!\d) so a
-# 17+ digit run is left whole rather than part-redacted, and amounts are
+# 17+ digit run is caught whole by [REF] rather than part-redacted, and amounts are
 # safe by construction: on a statement an amount always carries a decimal
 # point and/or thousands commas, so no amount ever yields a run of >= 10
 # contiguous digits (1,234,567.89 is runs of 1, 3, 3, 2).
@@ -134,6 +134,11 @@ REDACTION_PROFILES = ("company", "personal")
 # the label is off, and that is the safe direction.
 CARD_RE = re.compile(r"(?<!\d)\d{14,16}(?!\d)")
 ACCOUNT_RE = re.compile(r"(?<!\d)\d{10,16}(?!\d)")
+# [REF]: a 17+ digit run on a personal statement is a payment reference —
+# not money-moving, but a unique trace of one real transaction (issue #70).
+# Runs BEFORE CARD_RE/ACCOUNT_RE so a 19-digit run is never part-eaten by
+# the 10-16 window. Under company a long run is a document number: left whole.
+REF_RE = re.compile(r"(?<!\d)\d{17,}(?!\d)")
 
 # [ADDRESS]: a comma-separated segment holding a 5-digit Malaysian
 # postcode and a state name or MYS/MALAYSIA. The match reaches back over
@@ -208,7 +213,7 @@ def redact(text: str, extra_names: list[str] | None = None,
     """Scrub PII. Returns (clean_text, items_redacted).
 
     profile: "company" (default, frozen) or "personal" (superset — adds
-    [CARD], [ACCOUNT], [ADDRESS]). See the profile note above. Anything
+    [CARD], [ACCOUNT], [ADDRESS], [REF]). See the profile note above. Anything
     else raises ValueError: the caller must say what it is holding."""
     if profile not in REDACTION_PROFILES:
         raise ValueError(
@@ -253,6 +258,7 @@ def redact(text: str, extra_names: list[str] | None = None,
         # cards before accounts so 14-16 digit runs keep the card label.
         for pattern, token in (
             (ADDRESS_RE, "[ADDRESS]"),
+            (REF_RE, "[REF]"),
             (CARD_RE, "[CARD]"),
             (ACCOUNT_RE, "[ACCOUNT]"),
         ):
