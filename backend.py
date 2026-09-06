@@ -156,7 +156,13 @@ REF_RE = re.compile(r"(?<!\d)\d{17,}(?!\d)")
 # the ten-digit floor untouched. A Malaysian IC that MY_IC_RE declined
 # because its date was invalid is twelve and lands here as [ACCOUNT]: the
 # label is wrong, it is still redacted, and that is the safe direction.
-SEPARATED_RE = re.compile(r"(?<![\d,.\-/])\d{1,8}(?:-\d{1,8}){1,5}(?![\d,.\-/])")
+# The right edge excludes only what could continue the number, not what could
+# end a sentence. Barring "." and "," there was an attempt to protect amounts,
+# and it protected nothing: an amount carries no hyphen, so this pattern can
+# never reach one however it ends. What it did instead was shield every
+# account number written at the end of a sentence, which is where they are
+# usually written.
+SEPARATED_RE = re.compile(r"(?<![\d,.\-/])\d{1,8}(?:-\d{1,8}){1,5}(?![\d\-/])")
 
 
 def _separated_label(m: "re.Match") -> str:

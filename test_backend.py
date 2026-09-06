@@ -1567,6 +1567,18 @@ check("a below-threshold separated run adds nothing to the count",
 _c46b, _cn46b = _sep46("Acct 1234-56-7890 only", profile="personal")
 check("one separated account counts exactly once", _cn46b == 1, (_c46b, _cn46b))
 
+# 46h. A sentence-ending period must not shield an account number. The first
+# cut of SEPARATED_RE excluded "." on the right to keep decimals safe, which
+# also meant "... account 1234-56-7890." — a number at the end of a sentence,
+# the single most ordinary place for one — matched nothing. Amounts need no
+# protection on that side anyway: they carry no hyphen, so the pattern cannot
+# reach them however it ends.
+for _tail46 in (".", ",", ")", " ", "\n"):
+    _t46 = f"Your account is 1234-56-7890{_tail46}"
+    _r46, _ = _sep46(_t46, profile="personal")
+    check(f"account followed by {_tail46!r} -> [ACCOUNT]",
+          "1234-56-7890" not in _r46 and "[ACCOUNT]" in _r46, _r46)
+
 # 46g. A five-digit number with no state after it is still not an address.
 check("bare postcode-shaped number is not an address",
       "43000" in _sep46("Item 43000 units", profile="personal")[0])
