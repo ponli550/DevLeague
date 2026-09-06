@@ -140,22 +140,59 @@ ACCOUNT_RE = re.compile(r"(?<!\d)\d{10,16}(?!\d)")
 # the 10-16 window. Under company a long run is a document number: left whole.
 REF_RE = re.compile(r"(?<!\d)\d{17,}(?!\d)")
 
+# The three rules above all need CONTIGUOUS digits, which is what keeps an
+# amount safe — 1,234,567.89 is runs of 1, 3, 3, 2. A bank that prints its
+# account number with separators produces no run of ten either, so the number
+# those rules exist to catch went straight through and the count reported
+# nothing (issue #71).
+#
+# SEPARATED_RE matches hyphen-joined groups and the digits are counted in a
+# callback, because a regex cannot total them across groups. Hyphens only:
+# a comma or a decimal point ends the run, so an amount can still never be
+# eaten, and space-joined runs are deliberately NOT matched — two adjacent
+# columns of figures would collide and redact real data.
+#
+# A date is eight digits at most (2026-09-06, 06-09-2026) and so falls under
+# the ten-digit floor untouched. A Malaysian IC that MY_IC_RE declined
+# because its date was invalid is twelve and lands here as [ACCOUNT]: the
+# label is wrong, it is still redacted, and that is the safe direction.
+SEPARATED_RE = re.compile(r"(?<![\d,.\-/])\d{1,8}(?:-\d{1,8}){1,5}(?![\d,.\-/])")
+
+
+def _separated_label(m: "re.Match") -> str:
+    """Label a separated digit run by how many digits it actually holds, or
+    return it unchanged when it is too short to be an account."""
+    n = sum(c.isdigit() for c in m.group(0))
+    if n >= 17:
+        return "[REF]"
+    if n >= 10:
+        return "[ACCOUNT]"
+    return m.group(0)
+
 # [ADDRESS]: a comma-separated segment holding a 5-digit Malaysian
 # postcode and a state name or MYS/MALAYSIA. The match reaches back over
 # up to three preceding comma-tokens (house number / street / taman —
 # the parts that actually identify a home), each at most one line, and
 # runs forward through the state token and, if it follows, the country
 # token. A 5-digit number with no state after it is not an address.
+# Full names first: alternation is leftmost-first, so SELANGOR must be tried
+# before SEL or the longer name would never win. The abbreviations are the
+# forms a bank actually prints in an address block, and a few are only two or
+# three letters — the \b and the (?!\w) after the optional dot keep SEL from
+# firing inside SELANGOR, and a false positive here over-redacts an address,
+# which is the safe direction.
 _MY_STATES = (
     r"JOHOR|SELANGOR|KUALA\s+LUMPUR|PENANG|PULAU\s+PINANG|PERAK|KEDAH|MELAKA|"
     r"NEGERI\s+SEMBILAN|PAHANG|TERENGGANU|KELANTAN|SABAH|SARAWAK|PERLIS|"
-    r"LABUAN|PUTRAJAYA|MYS|MALAYSIA"
+    r"LABUAN|PUTRAJAYA|MYS|MALAYSIA|"
+    r"N\.?\s*SEMBILAN|P\.?\s*PINANG|K\.?\s*LUMPUR|W\.?\s*P|WPKL|"
+    r"SGR|SEL|JHR|KDH|KTN|MLK|NSN|PHG|PNG|PRK|PLS|SBH|SWK|TRG|PJY|LBN"
 )
 ADDRESS_RE = re.compile(
     r"(?:[^,\n]{1,60},[ \t]*\n?[ \t]*){0,3}"     # street / area tokens before
     r"[^,\n]*?(?<!\d)\d{5}(?!\d)"                 # the postcode token
     r"(?:[^,\n]*?,[ \t]*\n?[ \t]*){0,3}?[^,\n]*?"  # up to 3 tokens to the state
-    rf"\b(?:{_MY_STATES})\b"
+    rf"\b(?:{_MY_STATES})\.?(?!\w)"
     r"(?:,[ \t]*(?:MYS|MALAYSIA)\b)?",             # trailing country token
     re.IGNORECASE,
 )
@@ -339,6 +376,25 @@ def redact(text: str, extra_names: list[str] | None = None,
         # Order matters: address first (its postcode is 5 digits and its
         # tokens may hold a phone-like run already masked above), then
         # cards before accounts so 14-16 digit runs keep the card label.
+        # Separated runs first: they carry hyphens the contiguous rules can
+        # never see, and doing them here means a run is labelled once.
+        #
+        # Counted in the closure, not from subn: subn counts every match the
+        # pattern made, and a run under ten digits is matched and then handed
+        # back unchanged. Taking subn's figure would report redactions that
+        # did not happen, and the count is the only thing a caller has to
+        # tell "nothing needed redacting" from "nothing was looked at".
+        sep_hits = 0
+
+        def _sep_repl(m: "re.Match") -> str:
+            nonlocal sep_hits
+            out = _separated_label(m)
+            if out != m.group(0):
+                sep_hits += 1
+            return out
+
+        text = SEPARATED_RE.sub(_sep_repl, text)
+        count += sep_hits
         for pattern, token in (
             (ADDRESS_RE, "[ADDRESS]"),
             (REF_RE, "[REF]"),

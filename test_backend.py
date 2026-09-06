@@ -1557,6 +1557,16 @@ for _st46 in ("SGR", "SEL", "N. SEMBILAN", "P. PINANG", "W.P.", "PJY", "SWK"):
     check(f"address ending {_st46} -> [ADDRESS]",
           "43000" not in _r46 and "[ADDRESS]" in _r46, _r46)
 
+# 46f2. The count must be honest. A run below the threshold is matched by the
+# pattern and handed back unchanged, so taking subn's figure would report
+# redactions that never happened — and the count is the only signal a caller
+# has to tell "nothing needed redacting" from "nothing was looked at".
+_c46, _cn46 = _sep46("Ref 123-45-6789 only", profile="personal")
+check("a below-threshold separated run adds nothing to the count",
+      _cn46 == 0 and "123-45-6789" in _c46, (_c46, _cn46))
+_c46b, _cn46b = _sep46("Acct 1234-56-7890 only", profile="personal")
+check("one separated account counts exactly once", _cn46b == 1, (_c46b, _cn46b))
+
 # 46g. A five-digit number with no state after it is still not an address.
 check("bare postcode-shaped number is not an address",
       "43000" in _sep46("Item 43000 units", profile="personal")[0])
