@@ -1506,6 +1506,61 @@ _lr45, _ = _redact45(_lo45, profile="personal")
 check("2-char header token is not a name (AB survives), 3-char is",
       "AB" in _lr45 and " LIM " not in _lr45 and "TO LIM" not in _lr45, _lr45)
 
+# ── 46. Separated account numbers and abbreviated states (personal) ───────
+#
+# ACCOUNT_RE, CARD_RE and REF_RE all require a run of CONTIGUOUS digits.
+# That was chosen so an amount can never be eaten: 1,234,567.89 is runs of
+# 1, 3, 3, 2, so nothing reaches ten. The cost was invisible until a real
+# statement was run through it — a bank that prints its account number with
+# separators produces no run of ten either, so the number every one of these
+# rules exists to catch passes through untouched. It is not a partial miss;
+# it is a total bypass, and the redactor reports zero matches while the
+# account number is still on the page.
+#
+# All figures below are invented. Never put a real one in a public repo.
+
+_sep46 = lambda t, **kw: backend.redact(t, **kw)
+
+# 46a. Hyphen-separated runs of 10-16 digits are accounts under personal
+for _acct46 in ("1234-56-7890", "1-234-56-7890", "12-345678-901234"):
+    _r46, _n46 = _sep46(f"Account {_acct46} statement", profile="personal")
+    check(f"separated {_acct46} -> [ACCOUNT] under personal",
+          _acct46 not in _r46 and "[ACCOUNT]" in _r46 and _n46 >= 1, _r46)
+
+# 46b. The company profile stays frozen: a separated run is a document
+# reference on a company report, not a customer's account.
+check("separated run untouched under company",
+      "1234-56-7890" in _sep46("Ref 1234-56-7890 ok", profile="company")[0])
+
+# 46c. Amounts must survive. This is the guard the contiguous rule bought
+# and the fix must not spend: a comma or a decimal point ends the run.
+for _amt46 in ("1,234,567.89", "12,345.67", "1.00", "10,000,000.00"):
+    _r46, _ = _sep46(f"Paid {_amt46} today", profile="personal")
+    check(f"amount {_amt46} survives redaction", _amt46 in _r46, _r46)
+
+# 46d. Dates are eight digits and must not become accounts.
+for _d46 in ("2026-09-06", "06-09-2026", "01/07"):
+    _r46, _ = _sep46(f"On {_d46} paid", profile="personal")
+    check(f"date {_d46} survives redaction", _d46 in _r46, _r46)
+
+# 46e. Below the threshold, a separated run is left alone, exactly as a
+# contiguous nine-digit run is.
+check("separated 9-digit run untouched under personal",
+      "123-45-6789" in _sep46("Ref 123-45-6789 ok", profile="personal")[0])
+
+# 46f. A state written as an abbreviation is still a state. _MY_STATES held
+# only full names, so a postcode followed by SGR or N. SEMBILAN left the
+# whole address on the page.
+for _st46 in ("SGR", "SEL", "N. SEMBILAN", "P. PINANG", "W.P.", "PJY", "SWK"):
+    _addr46 = f"No 12 ,Jalan Contoh ,43000 ,{_st46}"
+    _r46, _ = _sep46(_addr46, profile="personal")
+    check(f"address ending {_st46} -> [ADDRESS]",
+          "43000" not in _r46 and "[ADDRESS]" in _r46, _r46)
+
+# 46g. A five-digit number with no state after it is still not an address.
+check("bare postcode-shaped number is not an address",
+      "43000" in _sep46("Item 43000 units", profile="personal")[0])
+
 # ── Summary ───────────────────────────────────────────────────────────────
 
 print(f"\n{'='*50}")
